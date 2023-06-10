@@ -1,0 +1,8 @@
+Best Epoch: 1
+Recall@1: 38.0184
+Recall@2: 51.5520
+Recall@4: 64.7008
+Recall@8: 74.8324
+
+MAP@R: 0.0677
+RP: 0.1624
