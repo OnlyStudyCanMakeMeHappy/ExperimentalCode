@@ -20,8 +20,6 @@ from torch.utils.tensorboard import SummaryWriter
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
 
-
-
 # worker -> windows : 0
 parser.add_argument('--data', default='/home/tuijiansuanfa/users/cjx/data/FGNET/images', type=str, help='path of dataset')
 parser.add_argument('--dim', default=64, type=int, help='embedding size')
@@ -46,6 +44,7 @@ parser.add_argument('--Lambda', default = 0.8,type = float)
 parser.add_argument('--delta', default= 0.5,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.5,type = float)
 parser.add_argument('--varepsilon', '-ve', default=0.5, type = float)
+
 args = parser.parse_args()
 
 class CustomSubset(Subset):
@@ -85,6 +84,7 @@ class DPair(BaseDistance):
         N = query_emb.size(1) // 2
         return torch.nn.functional.pairwise_distance(query_emb[:, : N], ref_emb[:, : N]) \
             + torch.nn.functional.pairwise_distance(query_emb[:, N :], ref_emb[:, N:])
+
 class POP(Dataset):
     def __init__(self, dataset, K=10):
         # dataset.data,dateset.targets -> torch
@@ -245,6 +245,7 @@ def train(
         writer.add_scalar('only_absolute_information', lossA, epoch)
         logger.info(f" Epoch:{epoch} ==> lossA : {lossA} , time_cost = {end_time - start_time:.2f}s")
 
+
 def main():
     fix_seed(0)
     assert args.gpu is not None, "GPU is necessary"
@@ -256,6 +257,7 @@ def main():
     #architecture.load_state_dict(torch.load(os.path.join(args.save_dir, 'best_model.pth')))
 
     base_transform, aug_transform, test_transform = get_transforms()
+
     # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
     # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
     # 数据集打乱 np.random.permutation
@@ -306,6 +308,7 @@ def main():
         {'params': Abs_Head.parameters(), 'lr': args.lr * 10},
         {'params': Rel_Head.parameters(), 'lr': args.lr * 10}
     ]
+
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
     dist_pair = DPair()
     loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.vartheta)
@@ -320,6 +323,16 @@ def main():
     eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
     logger.info("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
     record(hparams, eval_result)
+    optimizer = torch.optim.AdamW(params_group, weight_decay=4e-4)
+    dist_pair = DPair()
+    loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.delta)
+    loss_funcB = TripletMarginLoss(margin = args.vartheta)
+    #vartheta, varepsilon
+    for epoch in range(args.epochs):
+        train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, pop_train_loader, abs_train_loader , aug_transform, optimizer, epoch)
+    eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
+    print("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
+
 
 
 

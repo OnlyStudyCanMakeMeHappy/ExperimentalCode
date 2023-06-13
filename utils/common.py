@@ -1,5 +1,9 @@
 import os
 from typing import TextIO
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/main
 import numpy
 import torch
 import torch.nn as nn
@@ -7,9 +11,15 @@ from torchvision import transforms
 import tqdm
 import random
 import numpy as np
+<<<<<<< HEAD
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import cohen_kappa_score, mean_squared_error, mean_absolute_error
 import logging, colorlog
+=======
+import faiss
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import cohen_kappa_score, mean_squared_error, mean_absolute_error
+>>>>>>> origin/main
 def fix_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -49,6 +59,7 @@ def get_transforms(model: str = "ResNet50"):
         transforms.RandomPerspective(distortion_scale=0.15, p=1),
         transforms.ColorJitter([1., 1.1], [1., 1.1], [1., 1.1]),
     ])
+<<<<<<< HEAD
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.CenterCrop((224, 224)),
@@ -155,6 +166,52 @@ def get_embeddings_labels(data_loader, model, device = None):
     return embeddings, labels
 
 
+=======
+
+    #return base_transform, transform, aug_transform
+    return base_transform, aug_transform
+
+
+def evaluation(embeddings, labels, K=[]):
+    """
+    内存有限,限定单次能计算的最大的N = 1e4
+    :param args: 命令行参数
+    :param embeddings: 嵌入
+    :param labels: 标签
+    :param K: K-NN
+    :return:Recll@K
+    """
+    class_set, _, counts = torch.unique(labels, sorted=True, return_inverse=True, return_counts=True)
+
+    indices = []
+    M = int(1e4)
+    N = embeddings.size(0)
+    assert N >= max(K), "batch size N mast >= max(K)"
+    eval_iter = tqdm.tqdm(range((embeddings.size(0) + M - 1) // M), ncols=100)
+    eval_iter.set_description("Recall Evaluation")
+    for i in eval_iter:
+        s = i * M
+        e = min((i + 1) * M, N)
+
+        Chunk = embeddings[s: e]
+        sim_mat = torch.mm(Chunk, embeddings.t())
+        # 经过了L2Norm => [-1:1]
+        sim_mat[range(0, e - s), range(s, e)] = -2  # 将自相似度化为最小
+        # values, indices : Tensor
+        index = torch.topk(sim_mat, max(K))[1]  # return (values,indices)
+        indices.append(index)
+
+    indices = torch.cat(indices, dim=0)
+    #
+    topk_labels = labels[indices]
+    # 标签按照相似度排序
+    fmat = topk_labels == labels.unsqueeze(1)
+    recall_k = []
+    for k in K:
+        acc = (fmat[:, :k].sum(dim=1) > 0).float().mean().item()
+        recall_k.append(acc)
+    return recall_k
+>>>>>>> origin/main
 
 
 def recall(embeddings, labels, K=[]):
@@ -219,6 +276,7 @@ def recall(embeddings, labels, K=[]):
 
     return recall_k, MLRC
 
+<<<<<<< HEAD
 def evaluation(embeddings, labels, K=[]):
     """
     内存有限,限定单次能计算的最大的N = 1e4
@@ -258,3 +316,61 @@ def evaluation(embeddings, labels, K=[]):
         acc = (fmat[:, :k].sum(dim=1) > 0).float().mean().item()
         recall_k.append(acc)
     return recall_k
+=======
+def Record(file_path , recall_k, MLRC, epoch = None):
+    with open(file_path, "w") as f:
+        if epoch:
+            f.write('Best Epoch: {}\n'.format(epoch))
+        for i, K in enumerate([1, 2, 4, 8]):
+            f.write("Recall@{}: {:.4f}\n".format(K, recall_k[i]))
+
+        f.write("\nMAP@R: {:.4f}\n".format(MLRC[0]))
+        f.write("RP: {:.4f}\n".format(MLRC[1]))
+
+def predict(reference_embeddings, reference_labels,test_embeddings, k):
+    neigh = KNeighborsClassifier(n_neighbors=k)
+    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
+    pred = neigh.predict(test_embeddings.numpy())
+    return pred
+def compute_c_index(labels : numpy.ndarray, predict):
+    n = labels.shape[0]
+    cnt = 0
+    s = 0.0
+    for i in range(n):
+        for j in range(i + 1):
+            if labels[i] != labels[j]:
+                cnt += 1
+                s += (predict[i] == predict[j]) / 2 + (predict[i] < predict[j]) and (labels[i] < labels[j])
+    return s / cnt
+
+
+
+def Evaluation(test_loader, train_loader, model, device = None ,k = 5):
+    reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
+    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
+    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
+    test_labels = test_labels.numpy()
+    return {
+        "MAE" : mean_absolute_error(pred , test_labels),
+        "MSE" : mean_squared_error(pred , test_labels),
+        "QWK" : cohen_kappa_score(test_labels, pred),
+        "C_index" : compute_c_index(test_labels, pred)
+    }
+
+def get_embeddings_labels(data_loader, model, device = None):
+    model.eval()
+    embeddings = torch.Tensor()
+    labels = torch.LongTensor()
+    with torch.no_grad():
+        for (input, target) in (data_loader):
+            if device is not None:
+                input = input.cuda(device, non_blocking=True)
+            output = model(input)
+            embeddings = torch.cat((embeddings, output.cpu()), 0)
+            labels = torch.cat((labels, target))
+    return embeddings, labels
+
+
+
+
+>>>>>>> origin/main
