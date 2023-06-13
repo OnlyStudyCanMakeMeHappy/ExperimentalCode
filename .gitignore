@@ -1,0 +1,4 @@
+*.txt
+logs
+runs
+.idea
