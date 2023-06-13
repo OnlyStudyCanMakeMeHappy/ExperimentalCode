@@ -323,15 +323,6 @@ def main():
     eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
     logger.info("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
     record(hparams, eval_result)
-    optimizer = torch.optim.AdamW(params_group, weight_decay=4e-4)
-    dist_pair = DPair()
-    loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.delta)
-    loss_funcB = TripletMarginLoss(margin = args.vartheta)
-    #vartheta, varepsilon
-    for epoch in range(args.epochs):
-        train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, pop_train_loader, abs_train_loader , aug_transform, optimizer, epoch)
-    eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
-    print("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
 
 
 
