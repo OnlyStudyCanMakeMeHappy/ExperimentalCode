@@ -12,13 +12,14 @@ d = 64  # 数据的维度
 np.random.seed(1234)  # 设置随机种子，方便复现结果
 xb = np.random.random((nb, d)).astype('float32')  # 参考数据集
 xq = np.random.random((nq, d)).astype('float32')  # 查询数据集
-
+print(xb , xq)
 res = faiss.StandardGpuResources()   # 创建GPU资源
 index = faiss.GpuIndexFlatL2(res , d)
-gpu_index = faiss.index_cpu_to_gpu(res, 0, index)
+gpu_index = faiss.index_cpu_to_gpu(res, 1, index)
 gpu_index.add(xb)
 # k + 1 近邻,最相似的一定是自身与自身
 k = 4
+print("Search")
 D , I = index.search(xq, k + 1)
 print(D)
 print(I)
