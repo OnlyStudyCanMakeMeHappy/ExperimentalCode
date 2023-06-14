@@ -84,7 +84,10 @@ def record(hyper_params, metrics):
         f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
 
 def predict(reference_embeddings, reference_labels,test_embeddings, k):
-    pass
+    neigh = KNeighborsClassifier(n_neighbors=k)
+    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
+    pred = neigh.predict(test_embeddings.numpy())
+    return pred
 
 def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
