@@ -83,8 +83,15 @@ def record(hyper_params, metrics):
         f.write(dict2str(metrics , "=") + '\n')        
         f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
 
-def predict(reference_embeddings, reference_labels,test_embeddings, k):
-    pass
+def predict(reference_embeddings, reference_labels, query_embeddings, k):
+    #test在reference中找topk
+    #small query batch, small index: CPU is typically faster
+    dim = reference_embeddings.size(1)
+    index = faiss.Index2FlatL2(dim)
+    index.add(reference_embeddings.numpy())
+    # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
+    D, I = index.serach(query_embeddings.numpy() , k + 1)
+    return np.mean(reference_labels[1 : k].numpy())
 
 def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
