@@ -97,8 +97,8 @@ def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
     cnt = 0
     s = 0.0
-    for i in range(n):
-        for j in range(i + 1):
+    for i in range(n - 1):
+        for j in range(i + 1, n):
             if labels[i] != labels[j]:
                 cnt += 1
                 s += (predict[i] == predict[j]) / 2 + (predict[i] < predict[j]) and (labels[i] < labels[j])
