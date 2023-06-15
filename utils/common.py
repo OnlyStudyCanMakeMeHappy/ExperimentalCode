@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import cohen_kappa_score, mean_squared_error, mean_absolute_error
 import logging, colorlog
+import faiss
 
 def fix_seed(seed):
     random.seed(seed)
@@ -87,11 +88,14 @@ def predict(reference_embeddings, reference_labels, query_embeddings, k):
     #test在reference中找topk
     #small query batch, small index: CPU is typically faster
     dim = reference_embeddings.size(1)
-    index = faiss.Index2FlatL2(dim)
+    index = faiss.IndexFlatL2(dim)
     index.add(reference_embeddings.numpy())
     # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
-    D, I = index.serach(query_embeddings.numpy() , k + 1)
-    return np.mean(reference_labels[1 : k].numpy())
+    D, I = index.search(query_embeddings.numpy() , k + 1)
+    # I是一个 query_size * k 的二维下标
+    # 四舍五入将浮点数转换为整数
+    return np.round(np.mean(reference_labels.numpy()[I[ : , 1 : ]], axis = 1))
+
 
 def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
