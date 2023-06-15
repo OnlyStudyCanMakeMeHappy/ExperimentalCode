@@ -10,22 +10,24 @@ class ResNet50(nn.Module):
     def __init__(self, weight_path='weights_models', pretrained=True):
         super(ResNet50, self).__init__()
 
-        self.model = resnet50(weights = ResNet50_Weights.DEFAULT)        
+        model = resnet50(weights = ResNet50_Weights.DEFAULT)
 
-        del self.model.fc
-        self.model.avgpool = GMP_and_GAP()
-
+        #del self.model.fc
+        model.fc = nn.Identity()
+        model.avgpool = GMP_and_GAP()
+        self.model = model
     def forward(self, x):
         
-        x = self.model.conv1(x)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
-        x = self.model.avgpool(x)
+        # x = self.model.conv1(x)
+        # x = self.model.bn1(x)
+        # x = self.model.relu(x)
+        # x = self.model.maxpool(x)
+        # x = self.model.layer1(x)
+        # x = self.model.layer2(x)
+        # x = self.model.layer3(x)
+        # x = self.model.layer4(x)
+        # x = self.model.avgpool(x)
+        x = self.model(x)
         x = x.view(x.size(0) , -1)
         return x
 
