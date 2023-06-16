@@ -222,29 +222,25 @@ def main():
 
     base_transform, aug_transform, test_transform = get_transforms()
 
-    # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
-    # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
-    # 数据集打乱 np.random.permutation
-    # 训练数据和测试数据采用不同的transform
-
-
     dataset = FGNETDataset(root = args.data)
     abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset , 0.9 , 0.1, tx = base_transform, ty = test_transform)
-    details = {
-        "dataset" : len(dataset) ,
-        "test" : len(test_dataset) ,
-        "abs_info" : len(abs_train_dataset),
-        "partial_pairs" : len(pop_dataset),
-    }
 
     # getlogger
     logger = get_logger()
-    logger.critical(
-        "The length of dataset : {dataset} , "
-        "size of test : {test} , "
-        "size of absolute information : {abs_info}, "
-        "number of partial pairs : {partial_pairs} ".format(**details)
-    )
+    details = None
+    if args.fuse:
+        details = {
+            "dataset": len(dataset),
+            "test": len(test_dataset),
+            "abs_info": len(abs_train_dataset),
+            "partial_pairs": len(pop_dataset),
+        }
+        logger.critical(
+            "The length of dataset : {dataset} , "
+            "size of test : {test} , "
+            "size of absolute information : {abs_info}, "
+            "number of partial pairs : {partial_pairs} ".format(**details)
+        )
 
     sampler = MPerClassSampler(
         abs_train_dataset.labels,
@@ -252,8 +248,7 @@ def main():
         m = args.M,
         iter_per_epoch = len(abs_train_dataset) // args.batch_size
     )
-    # M * (N - 1) // N * K
-    # M * (N - 1) // N * (1 - K)
+
     abs_train_loader = DataLoader(
         abs_train_dataset,
         batch_size = args.batch_size,
@@ -282,7 +277,10 @@ def main():
     dist_pair = DPair()
     loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.vartheta)
     loss_funcB = TripletMarginLoss(margin = args.delta)
-    hparams = runtime_env(args, **details)
+    if args.fuse:
+        hparams = runtime_env(args, **details)
+    else:
+        hparams = runtime_env(args)
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
     print("==============START TRAING================")
     for epoch in range(1 , args.epochs + 1):
