@@ -1,0 +1,60 @@
+from torch.utils.data import DataLoader, Dataset, random_split, Subset
+import numpy as np
+
+class CustomSubset(Subset):
+    def __init__(self , dataset : Dataset, indices, transform = None):
+        super().__init__(dataset, indices)
+        self.transform = transform
+        self.labels = [self.dataset.labels[index] for index in indices]
+    def __len__(self):
+        return len(self.indices)
+    def __getitem__(self, item):
+        # 调用了父类SubSet的构造方法,所以拥有self.dataset和self.indices属性
+        data, label = self.dataset[self.indices[item]]
+        if self.transform is not None:
+            data = self.transform(data)
+        return data , label
+
+class POP(Dataset):
+    def __init__(self, dataset, K=10):
+        # dataset.data,dateset.targets -> torch
+        # 均分K等分, row by row, P(row , 2)
+        size = len(dataset)
+        split_sizes = [(size + K - 1) // K] * (size % K) + [size // K] * (K - size % K)
+        split_dataset = random_split(dataset, split_sizes)
+        self.data = self.match_pair(split_dataset)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def match_pair(self , data: list[Dataset]) -> list:
+        res = []
+        cmp = lambda x, y: 1 if x > y else 0
+        # data是一个二维列表, 实现(data[i] , data[j])两两配对
+        for i in range(len(data) - 1):
+            for j in range(i + 1, len(data)):
+                res.extend([(x[0], y[0], cmp(x[1], y[1])) for (x, y) in zip(data[i], data[j]) if x[1] != y[1]])
+                res.extend([(x[0], y[0], cmp(x[1], y[1])) for (y, x) in zip(data[i], data[j]) if x[1] != y[1]])
+        return res
+
+
+def spilt_dataset(dataset, r: float, tx=None, ty=None):
+    sze = len(dataset)
+    shuffled_indices = np.random.permutation(sze)
+    datasetX = CustomSubset(dataset, shuffled_indices[0: int(sze * r)], tx)
+    datasetY = CustomSubset(dataset, shuffled_indices[int(sze * r):], ty)
+    return datasetX, datasetY
+
+
+def process_dataset(dataset: Dataset, train_ratio, abs_ratio, tx = None , ty = None, N = 10):
+    # 划分训练集和测试集, 并施以不同的transform
+    train_data, test_data = spilt_dataset(dataset, train_ratio, tx, ty)
+    # 进一步将训练集划分为绝对信息和相对信息训练集
+    abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio)
+    # N等分构建偏序对
+    partial_order_pair = POP(rel_train_dataset, N)
+    return (abs_train_dataset, partial_order_pair, test_data)
+

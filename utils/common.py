@@ -63,7 +63,7 @@ def get_transforms(model: str = "ResNet50"):
 def dict2str(d , s = ':'):
     return "".join([f"{k}{s}{v}," for k,v in d.items()])[:-1]   
 
-def runtime_env(args):
+def runtime_env(args , **kwargs):
     base_hp = {
         "batch_size":args.batch_size,
         "lr":args.lr,
@@ -75,6 +75,8 @@ def runtime_env(args):
         base_hp["lambda"] = args.Lambda
         base_hp["vartheta"] = args.vartheta
         base_hp["varepsilon"] = args.varepsilon
+    for k , v in kwargs.items():
+        base_hp[k] = v
     return base_hp
 
 

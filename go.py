@@ -1,7 +1,6 @@
 import argparse
 import re
 import time
-import os
 import torch.nn.functional
 from model.embedding import Embedding
 from model.mlp import MLP
@@ -11,6 +10,7 @@ from PIL import Image
 import glob
 import pandas as pd
 from utils.common import *
+from utils.data_utils import *
 from pytorch_metric_learning.losses import TripletMarginLoss,MarginLoss, MultiSimilarityLoss
 from pytorch_metric_learning.distances import BaseDistance
 from pytorch_metric_learning.utils import loss_and_miner_utils as lmu
@@ -47,19 +47,7 @@ parser.add_argument('--varepsilon', '-ve', default=0.5, type = float)
 
 args = parser.parse_args()
 
-class CustomSubset(Subset):
-    def __init__(self , dataset : Dataset, indices, transform = None):
-        super().__init__(dataset, indices)
-        self.transform = transform
-        self.labels = [self.dataset.labels[index] for index in indices]
-    def __len__(self):
-        return len(self.indices)
-    def __getitem__(self, item):
-        # 调用了父类SubSet的构造方法,所以拥有self.dataset和self.indices属性
-        data, label = self.dataset[self.indices[item]]
-        if self.transform is not None:
-            data = self.transform(data)
-        return data , label
+
 class DPair(BaseDistance):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -85,30 +73,6 @@ class DPair(BaseDistance):
         return torch.nn.functional.pairwise_distance(query_emb[:, : N], ref_emb[:, : N]) \
             + torch.nn.functional.pairwise_distance(query_emb[:, N :], ref_emb[:, N:])
 
-class POP(Dataset):
-    def __init__(self, dataset, K=10):
-        # dataset.data,dateset.targets -> torch
-        # 均分K等分, row by row, P(row , 2)
-        size = len(dataset)
-        split_sizes = [(size + K - 1) // K] * (size % K) + [size // K] * (K - size % K)
-        split_dataset = random_split(dataset, split_sizes)
-        self.data = self.match_pair(split_dataset)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        return self.data[index]
-
-    def match_pair(slef , data: list[Dataset]) -> list:
-        res = []
-        cmp = lambda x, y: 1 if x > y else 0
-        # data是一个二维列表, 实现(data[i] , data[j])两两配对
-        for i in range(len(data) - 1):
-            for j in range(i + 1, len(data)):
-                res.extend([(x[0], y[0], cmp(x[1], y[1])) for (x, y) in zip(data[i], data[j]) if x[1] != y[1]])
-                res.extend([(x[0], y[0], cmp(x[1], y[1])) for (y, x) in zip(data[i], data[j]) if x[1] != y[1]])
-        return res
 class FGNETDataset(Dataset):
     def __init__(self, root, transform = None):
         file_path = root
@@ -262,21 +226,26 @@ def main():
     # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
     # 数据集打乱 np.random.permutation
     # 训练数据和测试数据采用不同的transform
-    def spilt_dataset(dataset , r : float, tx = None , ty = None):
-        sze = len(dataset)
-        shuffled_indices = np.random.permutation(sze)
-        datasetX = CustomSubset(dataset, shuffled_indices[0: int(sze * r)], tx)
-        datasetY = CustomSubset(dataset, shuffled_indices[int(sze * r) : ], ty)
-        return datasetX , datasetY
 
-    def process_dataset(dataset: Dataset, K: int = 10, N: int = 10, abs_ratio: float = 0.1):
-        train_data , test_data = spilt_dataset(dataset, (K - 1) / K, base_transform, test_transform)
-        abs_train_dataset , rel_train_dataset = spilt_dataset(train_data, abs_ratio)
-        partial_order_pair = POP(rel_train_dataset, N)
-        return (abs_train_dataset, partial_order_pair, test_data)
 
     dataset = FGNETDataset(root = args.data)
-    abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset)
+    abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset , 0.9 , 0.1, tx = base_transform, ty = test_transform)
+    details = {
+        "dataset" : len(dataset) ,
+        "test" : len(test_dataset) ,
+        "abs_info" : len(abs_train_dataset),
+        "partial_pairs" : len(pop_dataset),
+    }
+
+    # getlogger
+    logger = get_logger()
+    logger.critical(
+        "The length of dataset : {dataset} , "
+        "size of test : {test} , "
+        "size of absolute information : {abs_info}, "
+        "number of partial pairs : {partial_pairs} ".format(**details)
+    )
+
     sampler = MPerClassSampler(
         abs_train_dataset.labels,
         batch_size = args.batch_size,
@@ -313,10 +282,8 @@ def main():
     dist_pair = DPair()
     loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.vartheta)
     loss_funcB = TripletMarginLoss(margin = args.delta)
-    hparams = runtime_env(args)
+    hparams = runtime_env(args, **details)
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
-    # getlogger
-    logger = get_logger()
     print("==============START TRAING================")
     for epoch in range(1 , args.epochs + 1):
         train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, pop_train_loader, abs_train_loader , aug_transform, optimizer, epoch, writer , logger)
