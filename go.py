@@ -88,6 +88,7 @@ class FGNETDataset(Dataset):
                 if label >= intervals[i]:
                     self.groupIds.append(i)
                     break
+        self.classes = set(self.groupIds)
 
     def __len__(self):
         return len(self.images)
@@ -132,6 +133,7 @@ class AdienceDataset(Dataset):
                 self.labels.append(age_to_label_map[age_mapping_dict[row.age]])
                 img_path = f"{root}/images/{row.user_id}/landmark_aligned_face.{row.face_id}.{row.original_image}"
                 self.image_path.append(img_path)
+        self.classes = list(set(self.labels))
 
     def __len__(self):
         return len(self.image_path)
@@ -149,7 +151,7 @@ def train(
         Abs_Net,
         loss_funcA,
         loss_funcB,
-        pop_train_loader,
+        rel_train_loader,
         abs_train_loader ,
         aug_transform,
         optimizer,
@@ -162,7 +164,7 @@ def train(
     freeze_BN(Backbone)
     lossAList, lossRList = [] , []
     if args.fuse:
-        for idx,(x, y, label) in enumerate(pop_train_loader):
+        for idx,(x, y, label) in enumerate(rel_train_loader):
             x = x.to(args.gpu, non_blocking = True)
             y = y.to(args.gpu, non_blocking = True)
             label = label.to(args.gpu)
@@ -202,8 +204,8 @@ def train(
         writer.add_scalars("loss" , {
             "lossA" : lossA,
             "lossR": lossR,
-            "loss_toal": loss_total,
-        })
+            "loss_total": loss_total,
+        }, epoch)
         logger.info(f" Epoch:{epoch} ==> lossA : {lossA} , lossR : {lossR}, loss_total : {loss_total} , time_cost : {end_time - start_time : .2f}s")
     else:
         writer.add_scalar('only_absolute_information', lossA, epoch)
@@ -223,8 +225,8 @@ def main():
     base_transform, aug_transform, test_transform = get_transforms()
 
     dataset = FGNETDataset(root = args.data)
-    abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset , 0.9 , 0.1, tx = base_transform, ty = test_transform)
-
+    #abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset , 0.9 , 0.1, tx = base_transform, ty = test_transform)
+    abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.9, 0.1, tx=base_transform,ty=test_transform)
     # getlogger
     logger = get_logger()
     details = None
@@ -233,35 +235,49 @@ def main():
             "dataset": len(dataset),
             "test": len(test_dataset),
             "abs_info": len(abs_train_dataset),
-            "partial_pairs": len(pop_dataset),
         }
         logger.critical(
-            "The length of dataset : {dataset} , "
-            "size of test : {test} , "
-            "size of absolute information : {abs_info}, "
-            "number of partial pairs : {partial_pairs} ".format(**details)
+            "The length of dataset : {dataset} , The size of test : {test} , The size of absolute information : {abs_info}".format(**details)
         )
 
-    sampler = MPerClassSampler(
+    samplerA = MPerClassSampler(
         abs_train_dataset.labels,
         batch_size = args.batch_size,
         m = args.M,
         iter_per_epoch = len(abs_train_dataset) // args.batch_size
     )
-
+    batch_size = len(dataset.classes) * 2
+    samplerR = MPerClassSampler(
+        abs_train_dataset.labels,
+        batch_size = batch_size,
+        #batch_size = args.batch_size * 2,
+        #m = args.batch_size // len(dataset.classes),
+        m = 2,
+        #iter_per_epoch = len(rel_train_dataset) // args.batch_size
+        iter_per_epoch = len(rel_train_dataset) // batch_size
+    )
     abs_train_loader = DataLoader(
         abs_train_dataset,
         batch_size = args.batch_size,
         pin_memory = True,
-        sampler = sampler,
+        sampler = samplerA,
         num_workers = args.workers
     )
-    pop_train_loader = DataLoader(
-        pop_dataset,
-        batch_size = args.batch_size,
-        pin_memory = True,
-        shuffle = True,
+    rel_train_loader = DataLoader(
+        abs_train_dataset,
+        #batch_size = args.batch_size,
+        batch_size = 2 * len(dataset.classes),
+        pin_memory=True,
+        sampler=samplerR,
+        num_workers=args.workers,
+        collate_fn = match_partial_pairs,
     )
+    # pop_train_loader = DataLoader(
+    #     pop_dataset,
+    #     batch_size = args.batch_size,
+    #     pin_memory = True,
+    #     shuffle = True,
+    # )
     test_loader = DataLoader(
         test_dataset,
         batch_size = args.eval_batch_size,
@@ -282,9 +298,9 @@ def main():
     else:
         hparams = runtime_env(args)
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
-    print("==============START TRAING================")
+    print("=" * 20 +" START TRAING" + "=" * 20)
     for epoch in range(1 , args.epochs + 1):
-        train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, pop_train_loader, abs_train_loader , aug_transform, optimizer, epoch, writer , logger)
+        train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, rel_train_loader, abs_train_loader , aug_transform, optimizer, epoch, writer , logger)
     eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
     logger.info("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
     record(hparams, eval_result)

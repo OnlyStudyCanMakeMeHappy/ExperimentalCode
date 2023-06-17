@@ -1,5 +1,11 @@
 from torch.utils.data import DataLoader, Dataset, random_split, Subset
 import numpy as np
+import torch
+
+# 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
+# random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
+# 数据集打乱 np.random.permutation
+# 训练数据和测试数据采用不同的transform
 
 class CustomSubset(Subset):
     def __init__(self , dataset : Dataset, indices, transform = None):
@@ -55,6 +61,36 @@ def process_dataset(dataset: Dataset, train_ratio, abs_ratio, tx = None , ty = N
     # 进一步将训练集划分为绝对信息和相对信息训练集
     abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio)
     # N等分构建偏序对
-    partial_order_pair = POP(rel_train_dataset, N)
-    return (abs_train_dataset, partial_order_pair, test_data)
+    # partial_order_pair = POP(rel_train_dataset, N)
+    # return (abs_train_dataset, partial_order_pair, test_data)
+    return abs_train_dataset,rel_train_dataset, test_data
 
+
+def match_partial_pairs(batch):
+    # 按照标签分类
+    # [image , label]
+    classes = []
+    cls2ind = {}
+    for idx, (data, label) in enumerate(batch):
+        if cls2ind.get(label) is None:
+            cls2ind[label] = []
+            classes.append(label)
+        cls2ind[label].append(idx)
+
+    n = len(classes)
+    pre, succ, labels = [], [], []
+
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            a = 1 if classes[i] > classes[j] else 0
+            b = a ^ 1
+            indicesx, indicesy = cls2ind[classes[i]], cls2ind[classes[j]]
+            for (x, y) in zip(indicesx, indicesy):
+                # pairs.extend([torch.stack([dataset[x] , dataset[y]] ,dim = 0), torch.stack([dataset[y] , dataset[x]] ,dim = 0)])
+                pre.extend([batch[x][0], batch[y][0]])
+                succ.extend([batch[y][0], batch[x][0]])
+                labels.extend([a, b])
+    pre = torch.stack(pre, dim=0)
+    succ = torch.stack(succ, dim=0)
+    labels = torch.tensor(labels)
+    return pre, succ, labels
