@@ -71,14 +71,16 @@ def match_partial_pairs(batch):
     # [image , label]
     classes = []
     cls2ind = {}
+    data_seq = []
     for idx, (data, label) in enumerate(batch):
+        data_seq.append(data)
         if cls2ind.get(label) is None:
             cls2ind[label] = []
             classes.append(label)
         cls2ind[label].append(idx)
 
     n = len(classes)
-    pre, succ, labels = [], [], []
+    partial_pairs_indices , labels = [], [],
 
     for i in range(n - 1):
         for j in range(i + 1, n):
@@ -86,11 +88,8 @@ def match_partial_pairs(batch):
             b = a ^ 1
             indicesx, indicesy = cls2ind[classes[i]], cls2ind[classes[j]]
             for (x, y) in zip(indicesx, indicesy):
-                # pairs.extend([torch.stack([dataset[x] , dataset[y]] ,dim = 0), torch.stack([dataset[y] , dataset[x]] ,dim = 0)])
-                pre.extend([batch[x][0], batch[y][0]])
-                succ.extend([batch[y][0], batch[x][0]])
+                partial_pairs_indices.extend([[x , y],[y , x]])
                 labels.extend([a, b])
-    pre = torch.stack(pre, dim=0)
-    succ = torch.stack(succ, dim=0)
+    partial_pairs_indices = torch.tensor(partial_pairs_indices)
     labels = torch.tensor(labels)
-    return pre, succ, labels
+    return data, partial_pairs_indices, labels
