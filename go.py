@@ -5,7 +5,6 @@ import torch.nn.functional
 from model.embedding import Embedding
 from model.mlp import MLP
 import model.backbone as backbone
-from torch.utils.data import DataLoader, Dataset, random_split, Subset
 from PIL import Image
 import glob
 import pandas as pd
@@ -16,12 +15,25 @@ from pytorch_metric_learning.distances import BaseDistance
 from pytorch_metric_learning.utils import loss_and_miner_utils as lmu
 from MPerClassSampler import MPerClassSampler
 from torch.utils.tensorboard import SummaryWriter
+from datasets import FGNET, Adience
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
-
+class ChoiceAction(argparse.Action):
+    def __call__(self, parser , namespace, value, option_string = None):
+        """
+        :param parser: The ArgumentParser object which contains this action
+        :param namespace: The Namespace object that will be returned by parse_args().
+        :param value: command-line arguments
+        :return: set attributes on the namespace based on dest and values
+        """
+        setattr(namespace, self.dest, self.choices[value])
 # worker -> windows : 0
-parser.add_argument('--data', default='/home/tuijiansuanfa/users/cjx/data/FGNET/images', type=str, help='path of dataset')
+parser.add_argument('--data', default = FGNET,
+                    choices = {
+                        "FGNET" : FGNET,
+                        "Adience" : Adience,
+                    } , action = ChoiceAction)
 parser.add_argument('--dim', default=64, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('-j', '--workers', default=2, type=int)
@@ -32,9 +44,11 @@ parser.add_argument('--eval_batch_size', default=120, type=int)
 #==============================learning rate==========================#
 parser.add_argument('--lr', default=1e-5, type=float)
 parser.add_argument('--weight_decay', default=1e-5, type=float)
+parser.add_argument('--lr_scheduler', '-ls', dest = 'ls', action = "store_true") #dest: specify the attribute name used in the result name
+parser.add_argument('--lr_decay_epochs' , default = [30 , 60, 90] , nargs = "+", help = "numbers list of learning rate decay epoch")
+parser.add_argument('--lr_decay_gamma' , default = 0.1 , type=float)
 
-
-parser.add_argument('--gpu', default=None, type=int)
+parser.add_argument('--gpu', default=None, type=int, required = True)
 #==============================hyper parameters of relative information==============================#
 parser.add_argument('--fuse' , action = "store_true", help = "whether fuse the relative information")
 parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'margin'])
@@ -46,7 +60,6 @@ parser.add_argument('--vartheta', '-vt', default = 0.5,type = float)
 parser.add_argument('--varepsilon', '-ve', default=0.5, type = float)
 
 args = parser.parse_args()
-
 
 class DPair(BaseDistance):
     def __init__(self, **kwargs):
@@ -73,78 +86,6 @@ class DPair(BaseDistance):
         return torch.nn.functional.pairwise_distance(query_emb[:, : N], ref_emb[:, : N]) \
             + torch.nn.functional.pairwise_distance(query_emb[:, N :], ref_emb[:, N:])
 
-class FGNETDataset(Dataset):
-    def __init__(self, root, transform = None):
-        file_path = root
-        file_names = os.listdir(root)
-        img_paths = [os.path.join(file_path, file_name) for file_name in file_names]
-        self.images = [Image.open(img_path).convert('RGB') for img_path in img_paths]
-        self.labels = [int(re.match(r'\d{3}A(\d+)\w?.JPG', name).group(1)) for name in file_names]
-        self.transform = transform
-        intervals = [0, 3, 11, 16, 24, 40]
-        self.groupIds = list()
-        for label in self.labels:
-            for i in range(len(intervals) - 1, -1, -1):
-                if label >= intervals[i]:
-                    self.groupIds.append(i)
-                    break
-        self.classes = set(self.groupIds)
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, index):
-        image = self.images[index]
-        if self.transform is not None:
-            image = self.transform(image)
-        #label = self.labels[index]
-        label = self.groupIds[index]
-        return image, label
-class AdienceDataset(Dataset):
-    def __init__(self, root, transform=None):
-        # 获取每张图像的绝对路径
-        # self.img_path = os.path.join(root , 'images')
-        age_mapping = [('(0, 2)', '0-2'), ('2', '0-2'), ('3', '0-2'), ('(4, 6)', '4-6'), ('(8, 12)', '8-13'),
-                       ('13', '8-13'), ('22', '15-20'), ('(8, 23)', '15-20'), ('23', '25-32'), ('(15, 20)', '15-20'),
-                       ('(25, 32)', '25-32'), ('(27, 32)', '25-32'), ('32', '25-32'), ('34', '25-32'), ('29', '25-32'),
-                       ('(38, 42)', '38-43'), ('35', '38-43'), ('36', '38-43'), ('42', '48-53'), ('45', '38-43'),
-                       ('(38, 43)', '38-43'), ('(38, 42)', '38-43'), ('(38, 48)', '48-53'), ('46', '48-53'),
-                       ('(48, 53)', '48-53'), ('55', '48-53'), ('56', '48-53'), ('(60, 100)', '60+'), ('57', '60+'),
-                       ('58', '60+')]
-        age_mapping_dict = dict(age_mapping)
-        age_to_label_map = {
-            '0-2': 0,
-            '4-6': 1,
-            '8-13': 2,
-            '15-20': 3,
-            '25-32': 4,
-            '38-43': 5,
-            '48-53': 6,
-            '60+': 7
-        }
-        anna_file_path = glob.glob(root + "/targets/*.txt")
-        data_list = [pd.read_csv(path, delimiter='\t', ) for path in anna_file_path]
-        data = pd.concat(data_list, ignore_index=True)
-        self.labels = []
-        self.image_path = []
-        self.transform = transform
-        for _, row in data.iterrows():
-            if row.age != 'None':
-                self.labels.append(age_to_label_map[age_mapping_dict[row.age]])
-                img_path = f"{root}/images/{row.user_id}/landmark_aligned_face.{row.face_id}.{row.original_image}"
-                self.image_path.append(img_path)
-        self.classes = list(set(self.labels))
-
-    def __len__(self):
-        return len(self.image_path)
-
-    def __getitem__(self, item):
-        image = Image.open(self.image_path[item])
-        label = self.labels[item]
-        if self.transform is not None:
-            image = self.transform(image)
-        return image, label
-
 def train(
         Backbone,
         Rel_Net,
@@ -164,14 +105,15 @@ def train(
     freeze_BN(Backbone)
     lossAList, lossRList = [] , []
     if args.fuse:
-        for idx,(x, y, label) in enumerate(rel_train_loader):
-            x = x.to(args.gpu, non_blocking = True)
-            y = y.to(args.gpu, non_blocking = True)
+        for idx, (data, pairs_indices, label) in enumerate(rel_train_loader):
+            data = data.to(args.gpu , non_blocking = True)
+            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
             label = label.to(args.gpu)
-            x_embedding,y_embedding = Rel_Net(x) ,Rel_Net(y)
+            embedding = Rel_Net(data)
+            x_embedding, y_embedding = embedding[idx] , embedding[idy]
             loss1 = loss_funcA(torch.cat((x_embedding, y_embedding), dim = 1), label)
-            aug_x = aug_transform(x)
-            aug_embedding = Rel_Net(aug_x)
+            aug_data = aug_transform(data)
+            aug_embedding = Rel_Net(aug_data)[idx]
             loss2 = torch.mean(
                 torch.nn.functional.relu(
                     torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
@@ -224,7 +166,7 @@ def main():
 
     base_transform, aug_transform, test_transform = get_transforms()
 
-    dataset = FGNETDataset(root = args.data)
+    dataset = args.data()
     #abs_train_dataset, pop_dataset, test_dataset = process_dataset(dataset , 0.9 , 0.1, tx = base_transform, ty = test_transform)
     abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.9, 0.1, tx=base_transform,ty=test_transform)
     # getlogger
@@ -246,15 +188,16 @@ def main():
         m = args.M,
         iter_per_epoch = len(abs_train_dataset) // args.batch_size
     )
-    batch_size = len(dataset.classes) * 2
+    #P = 6
+    P = len(dataset.classes)
+    K = 2
+    batch_size = P * K
     samplerR = MPerClassSampler(
         abs_train_dataset.labels,
         batch_size = batch_size,
-        #batch_size = args.batch_size * 2,
-        #m = args.batch_size // len(dataset.classes),
-        m = 2,
+        m = K,
         #iter_per_epoch = len(rel_train_dataset) // args.batch_size
-        iter_per_epoch = len(rel_train_dataset) // batch_size
+        iter_per_epoch = len(abs_train_dataset) // batch_size
     )
     abs_train_loader = DataLoader(
         abs_train_dataset,
@@ -265,8 +208,7 @@ def main():
     )
     rel_train_loader = DataLoader(
         abs_train_dataset,
-        #batch_size = args.batch_size,
-        batch_size = 2 * len(dataset.classes),
+        batch_size = batch_size,
         pin_memory=True,
         sampler=samplerR,
         num_workers=args.workers,
@@ -290,6 +232,8 @@ def main():
     ]
 
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer , milestones=args.lr_decay_epochs , gamma = args.lr_decay_gamma)
+
     dist_pair = DPair()
     loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.vartheta)
     loss_funcB = TripletMarginLoss(margin = args.delta)
@@ -298,11 +242,14 @@ def main():
     else:
         hparams = runtime_env(args)
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
-    print("=" * 20 +" START TRAING" + "=" * 20)
+    print("=" * 30 +" START TRAING" + "=" * 30)
     for epoch in range(1 , args.epochs + 1):
         train(Backbone, Rel_Net, Abs_Net, loss_funcA, loss_funcB, rel_train_loader, abs_train_loader , aug_transform, optimizer, epoch, writer , logger)
+        if args.ls:
+            lr_scheduler.step()
     eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
     logger.info("MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
+    writer.add_hparams(hparams , eval_result)
     record(hparams, eval_result)
 
 
