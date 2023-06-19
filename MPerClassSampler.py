@@ -41,6 +41,8 @@ class MPerClassSampler(Sampler):
     def __iter__(self):
         for _ in range(self.iter_per_epoch):
             # 重排列所有类别, 打乱顺序
+            # 固定了随机种子, 每个iter打乱之后的顺序都不相同
+            # 随机种子确定了随机生成算法的起点, 每次程序运行生成的序列具有规律性
             np.random.shuffle(self.class_idx)
             selected_indices = []
             # 每个类别最多选取min(m , n), n是类别的数量

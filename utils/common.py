@@ -18,9 +18,8 @@ def fix_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    if seed == 0:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True   # CUDA采用确定性算法
+    torch.backends.cudnn.benchmark = False  # 禁用cudnn的自动优化机制
 
 def freeze_BN(model):
     for m in model.modules():
@@ -86,7 +85,7 @@ def record(hyper_params, metrics):
         f.write(dict2str(metrics , "=") + '\n')        
         f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
 
-def predict(reference_embeddings, reference_labels, query_embeddings, k):
+def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     #test在reference中找topk
     #small query batch, small index: CPU is typically faster
     dim = reference_embeddings.size(1)
@@ -96,7 +95,7 @@ def predict(reference_embeddings, reference_labels, query_embeddings, k):
     D, I = index.search(query_embeddings.numpy() , k + 1)
     # I是一个 query_size * k 的二维下标
     # 四舍五入将浮点数转换为整数
-    return np.round(np.mean(reference_labels.numpy()[I[ : , 1 : ]], axis = 1))
+    return reference_labels.numpy()[I[ : , 1 : ]]
 
 
 def compute_c_index(labels : numpy.ndarray, predict):
@@ -139,19 +138,22 @@ def get_logger(logger_name = None):
     logger.addHandler(console)
     return logger
 
-def Evaluation(test_loader, train_loader, model, device = None ,k = 5):
+def Evaluation(test_loader, train_loader, model, device = None ,k = 5, only_Accuracy = False):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
-    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)    
+    knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
+    pred = np.round(np.mean(knn_indices, axis=1))
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
-    return {
+    if not only_Accuracy:
+        return {
         "MAE" : mean_absolute_error(pred , test_labels),
         "MSE" : mean_squared_error(pred , test_labels),
         "QWK" : cohen_kappa_score(test_labels, pred),
         "C_index" : compute_c_index(test_labels, pred)
     }
-
+    else:
+        return acc
 def get_embeddings_labels(data_loader, model, device = None):
     model.eval()
     embeddings = torch.Tensor()
