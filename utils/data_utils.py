@@ -91,5 +91,6 @@ def match_partial_pairs(batch):
                 partial_pairs_indices.extend([[x , y],[y , x]])
                 labels.extend([a, b])
     partial_pairs_indices = torch.tensor(partial_pairs_indices)
+    data = torch.stack(data_seq)
     labels = torch.tensor(labels)
     return data, partial_pairs_indices, labels
