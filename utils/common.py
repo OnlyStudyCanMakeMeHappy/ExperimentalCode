@@ -106,7 +106,8 @@ def compute_c_index(labels : numpy.ndarray, predict):
         for j in range(i + 1, n):
             if labels[i] != labels[j]:
                 cnt += 1
-                s += (predict[i] == predict[j]) / 2 + (predict[i] < predict[j]) and (labels[i] < labels[j])
+                # predict[i] != predict[j]
+                s += (predict[i] == predict[j]) / 2 + ((predict[i] < predict[j]) and (labels[i] < labels[j]) or (predict[i] > predict[j]) and (labels[i] > labels[j]))
     return s / cnt
 
 def get_logger(logger_name = None):
