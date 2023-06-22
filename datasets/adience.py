@@ -33,6 +33,7 @@ class Adience(Dataset):
         data = data.dropna(subset=['age'])
         self.labels = []
         self.image_path = []
+        self.images = []
         self.transform = transform
         for _, row in data.iterrows():
             # pandas version 2.0.2
@@ -40,6 +41,7 @@ class Adience(Dataset):
                 self.labels.append(age_to_label_map[age_mapping_dict[row.age]])
                 img_path = f"{self.root}/images/{row.user_id}/landmark_aligned_face.{row.face_id}.{row.original_image}"
                 self.image_path.append(img_path)
+                #self.images.append(Image.open(img_path))
         self.classes = list(set(self.labels))
 
     def __len__(self):
@@ -47,6 +49,7 @@ class Adience(Dataset):
 
     def __getitem__(self, item):
         image = Image.open(self.image_path[item])
+        #image = self.images[item]
         label = self.labels[item]
         if self.transform is not None:
             image = self.transform(image)

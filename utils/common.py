@@ -83,8 +83,8 @@ def record(hyper_params, metrics):
     with open("logs.txt" , 'a') as f:
         f.write(dict2str(hyper_params) + '\n')
         f.write(dict2str(metrics , "=") + '\n')        
-        f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
-
+        #f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
+        f.write("\n.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.\n|=.--. |=.--. |=.--. |=.--. |=.--. |D.--. |E.--. |L.--. |I.--. |M.--. |I.--. |T.--. |E.--. |R.--. |=.--. |=.--. |=.--. |=.--. |=.--. |\n| (\\/) | (\\/) | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :/\\: | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :(): | (\\/) | (\\/) | (\\/) | (\\/) | (\\/) |\n| :\\/: | :\\/: | :\\/: | :\\/: | :\\/: | (__) | :\\/: | (__) | :\\/: | :\\/: | :\\/: | (__) | :\\/: | ()() | :\\/: | :\\/: | :\\/: | :\\/: | :\\/: |\n| '--'=| '--'=| '--'=| '--'=| '--'=| '--'D| '--'E| '--'L| '--'I| '--'M| '--'I| '--'T| '--'E| '--'R| '--'=| '--'=| '--'=| '--'=| '--'=|\n`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------'\n")
 def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     #test在reference中找topk
     #small query batch, small index: CPU is typically faster
@@ -106,7 +106,7 @@ def compute_c_index(labels : numpy.ndarray, predict):
         for j in range(i + 1, n):
             if labels[i] != labels[j]:
                 cnt += 1
-                # predict[i] != predict[j]
+                # predict[i] == predict[j] and labels[i] > labels[j] x
                 s += (predict[i] == predict[j]) / 2 + ((predict[i] < predict[j]) and (labels[i] < labels[j]) or (predict[i] > predict[j]) and (labels[i] > labels[j]))
     return s / cnt
 
@@ -139,22 +139,20 @@ def get_logger(logger_name = None):
     logger.addHandler(console)
     return logger
 
-def Evaluation(test_loader, train_loader, model, device = None ,k = 5, only_Accuracy = False):
+def Evaluation(test_loader, train_loader, model, device = None ,k = 5):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
     knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
     pred = np.round(np.mean(knn_indices, axis=1))
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
-    if not only_Accuracy:
-        return {
-        "MAE" : mean_absolute_error(pred , test_labels),
-        "MSE" : mean_squared_error(pred , test_labels),
-        "QWK" : cohen_kappa_score(test_labels, pred),
-        "C_index" : compute_c_index(test_labels, pred)
-    }
-    else:
-        return acc
+    return {
+    "ACC" : acc,
+    "MAE" : mean_absolute_error(pred , test_labels),
+    "MSE" : mean_squared_error(pred , test_labels),
+    "QWK" : cohen_kappa_score(test_labels, pred),
+    "C_index" : compute_c_index(test_labels, pred)
+}
 def get_embeddings_labels(data_loader, model, device = None):
     model.eval()
     embeddings = torch.Tensor()
@@ -172,105 +170,4 @@ def get_embeddings_labels(data_loader, model, device = None):
 
 
 
-def evaluation(embeddings, labels, K=[]):
-    """
-    内存有限,限定单次能计算的最大的N = 1e4
-    :param args: 命令行参数
-    :param embeddings: 嵌入
-    :param labels: 标签
-    :param K: K-NN
-    :return:Recll@K
-    """
-    class_set, _, counts = torch.unique(labels, sorted=True, return_inverse=True, return_counts=True)
 
-    indices = []
-    M = int(1e4)
-    N = embeddings.size(0)
-    assert N >= max(K), "batch size N mast >= max(K)"
-    eval_iter = tqdm.tqdm(range((embeddings.size(0) + M - 1) // M), ncols=100)
-    eval_iter.set_description("Recall Evaluation")
-    for i in eval_iter:
-        s = i * M
-        e = min((i + 1) * M, N)
-
-        Chunk = embeddings[s: e]
-        sim_mat = torch.mm(Chunk, embeddings.t())
-        # 经过了L2Norm => [-1:1]
-        sim_mat[range(0, e - s), range(s, e)] = -2  # 将自相似度化为最小
-        # values, indices : Tensor
-        index = torch.topk(sim_mat, max(K))[1]  # return (values,indices)
-        indices.append(index)
-
-    indices = torch.cat(indices, dim=0)
-    #
-    topk_labels = labels[indices]
-    # 标签按照相似度排序
-    fmat = topk_labels == labels.unsqueeze(1)
-    recall_k = []
-    for k in K:
-        acc = (fmat[:, :k].sum(dim=1) > 0).float().mean().item()
-        recall_k.append(acc)
-    return recall_k
-
-
-def recall(embeddings, labels, K=[]):
-    knn_inds = []
-    M = 10000
-    class_set, inverse_indices, counts = torch.unique(labels, sorted=True, return_inverse=True, return_counts=True)
-    labels_counts = {k.item() : v for k, v in zip(class_set, counts)}
-
-
-    evaluation_iter = tqdm.tqdm(range(embeddings.shape[0] // M + 1), ncols=80)
-    evaluation_iter.set_description("Measuring recall...")
-    for i in evaluation_iter:
-        s = i * M
-        e = min((i + 1) * M, embeddings.shape[0])
-        # print(s, e)
-
-        embeddings_select = embeddings[s:e]
-        cos_sim = nn.functional.linear(embeddings_select, embeddings)
-        cos_sim[range(0, e - s), range(s, e)] = 1e5
-        knn_ind = cos_sim.topk(1 + max(max(counts), max(K)))[1][:, 1:]
-        knn_inds.append(knn_ind)
-
-    knn_inds = torch.cat(knn_inds, dim=0)
-
-    selected_labels = labels[knn_inds]
-    correct_labels = labels.unsqueeze(1) == selected_labels
-
-    MLRC = (0, 0)
-
-    mAP = []
-    RP = []
-    evaluation_iter = tqdm.tqdm(range(labels.shape[0]), ncols=80)
-    evaluation_iter.set_description("Measuring MAP and RP")
-    for i in evaluation_iter:
-
-        cnt = counts[labels[i] - class_set[0]] - 1
-        #cnt = labels_counts[labels[i].item()]
-        l = correct_labels[i, 0:cnt].float()
-        rp = l.sum() / cnt
-
-        intersect_size = 0
-        ap = 0
-        for j in range(len(l)):
-
-            if l[j]:
-                intersect_size += 1
-                precision = intersect_size / (j + 1)
-                ap += precision / cnt
-
-        RP.append(rp)
-        mAP.append(ap)
-
-    RP = sum(RP) / len(RP)
-    mAP = sum(mAP) / len(mAP)
-
-    MLRC = (mAP.item(), RP.item())
-
-    recall_k = []
-    for k in K:
-        correct_k = 100 * (correct_labels[:, :k].sum(dim=1) > 0).float().mean().item()
-        recall_k.append(correct_k)
-
-    return recall_k, MLRC
