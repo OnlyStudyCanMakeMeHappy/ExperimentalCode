@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader, Dataset, random_split, Subset
 import numpy as np
 import torch
-
+from collections import defaultdict
 # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
 # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
 # 数据集打乱 np.random.permutation
@@ -94,3 +94,26 @@ def match_partial_pairs(batch):
     data = torch.stack(data_seq)
     labels = torch.tensor(labels)
     return data, partial_pairs_indices, labels
+
+def construct_partial_pairs(labels):
+    labels = labels.cpu().tolist()
+    cls2ind = defaultdict(list)
+    for idx, label in enumerate(labels):
+        cls2ind[label].append(idx)
+    new_labels = []
+    partial_pairs_indices = []
+    for ci in cls2ind.keys():
+        for cj in cls2ind.keys():
+            if ci == cj:
+                continue
+            label = 1 if ci > cj else 0
+            indicesx, indicesy = cls2ind[ci], cls2ind[cj]
+            for (x, y) in zip(indicesx, indicesy):
+                partial_pairs_indices.append([x, y])
+                new_labels.append(label)
+    partial_pairs_indices = torch.tensor(partial_pairs_indices)
+    labels = torch.tensor(new_labels)
+    # 打乱一下顺序, shuffle
+    # shuffle_idx = torch.randperm(labels.size(0))
+    # return partial_pairs_indices[shuffle_idx], labels[shuffle_idx]
+    return partial_pairs_indices , labels
