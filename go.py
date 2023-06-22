@@ -1,5 +1,7 @@
 import argparse
 import time
+
+import numpy as np
 import torch.nn.functional
 
 import losses
@@ -58,8 +60,60 @@ parser.add_argument('--delta', default= 0.5,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.5,type = float)
 parser.add_argument('--varepsilon', '-ve', default=0.5, type = float)
 
+parser.add_argument('--swap', action='store_true')
 args = parser.parse_args()
 
+def train_g(
+        Rel_Net,
+        rel_train_loader,
+        loss_funcA,
+        optimizer,
+        aug_transform
+):
+    LossRList = []
+    for idx, (data, target) in enumerate(rel_train_loader):
+        data = data.to(args.gpu, non_blocking=True)
+        pairs_indices, label = construct_partial_pairs(target)
+        idx, idy = pairs_indices[:, 0], pairs_indices[:, 1]
+        label = label.to(args.gpu)
+        embedding = Rel_Net(data)
+        x_embedding, y_embedding = embedding[idx], embedding[idy]
+        loss1 = loss_funcA(torch.cat((x_embedding, y_embedding), dim=1), label)
+        aug_data = aug_transform(data)
+        aug_embedding = Rel_Net(aug_data)[idx]
+        loss2 = torch.mean(
+            torch.nn.functional.relu(
+                torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
+                torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
+                args.varepsilon
+            )
+        )
+        loss = loss1 + args.mu * loss2
+        # loss = loss1
+        LossRList.append(loss.item())
+        loss *= args.Lambda
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    return np.mean(LossRList)
+
+def train_f(
+        Abs_Net,
+        abs_train_loader,
+        loss_funcB,
+        optimizer,
+):
+    lossAList = []
+    for idx,(image , label) in enumerate(abs_train_loader):
+        image = image.to(args.gpu, non_blocking = True)
+        label = label.to(args.gpu, non_blocking = True)
+        embedding = Abs_Net(image)
+        loss = loss_funcB(embedding, label)
+        lossAList.append(loss.item())
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    return np.mean(lossAList)
 
 def train(
         Backbone,
@@ -78,46 +132,22 @@ def train(
     start_time = time.time()
     Backbone.train()
     freeze_BN(Backbone)
-    lossAList, lossRList = [] , []
-    if args.fuse:
-        for idx, (data, pairs_indices, label) in enumerate(rel_train_loader):
-            data = data.to(args.gpu , non_blocking = True)
-            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-            label = label.to(args.gpu)
-            embedding = Rel_Net(data)
-            x_embedding, y_embedding = embedding[idx] , embedding[idy]
-            loss1 = loss_funcA(torch.cat((x_embedding, y_embedding), dim = 1), label)
-            aug_data = aug_transform(data)
-            aug_embedding = Rel_Net(aug_data)[idx]
-            loss2 = torch.mean(
-                torch.nn.functional.relu(
-                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                    args.varepsilon
-                )
-            )
-            loss = loss1 + args.mu * loss2
-            #loss = loss1
-            lossRList.append(loss.item())
-            loss *= args.Lambda
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    lossR , lossA = None , None
 
-    for idx,(image , label) in enumerate(abs_train_loader):
-        image = image.to(args.gpu, non_blocking = True)
-        label = label.to(args.gpu, non_blocking = True)
-        embedding = Abs_Net(image)
-        loss = loss_funcB(embedding, label)
-        lossAList.append(loss.item())
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    if args.fuse:
+        if not args.swap:
+            lossR = train_g(Rel_Net, rel_train_loader, loss_funcA, optimizer, aug_transform)
+            lossA = train_f(Abs_Net, abs_train_loader, loss_funcB, optimizer)
+        else:
+            lossA = train_f(Abs_Net, abs_train_loader, loss_funcB, optimizer)
+            lossR = train_g(Rel_Net, rel_train_loader, loss_funcA, optimizer, aug_transform)
+
+    else:
+        lossA = train_f(Abs_Net, abs_train_loader, loss_funcB, optimizer)
+
     end_time = time.time()
-    lossA , lossR = np.mean(lossAList) , np.mean(lossRList)
-    loss_total = lossA + args.Lambda * lossR
-
     if args.fuse:
+        loss_total = lossA + args.Lambda * lossR
         writer.add_scalars("loss" , {
             "lossA" : lossA,
             "lossR": lossR,
@@ -190,7 +220,7 @@ def main():
         pin_memory=True,
         sampler=samplerR,
         num_workers=args.workers,
-        collate_fn = match_partial_pairs,
+        #collate_fn = match_partial_pairs,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -231,9 +261,9 @@ def main():
                     f.write(f'best_epoch : {epoch}\n')
                     for k, v in res.items():
                         f.write(f'best {k} : {v}\n')
-            if acc < best_acc and epoch - best_epoch >= patience:
-                print(f"Early Stopping at Epoch:{epoch}")
-                break
+            # if acc < best_acc and epoch - best_epoch >= patience:
+            #     print(f"Early Stopping at Epoch:{epoch}")
+            #     break
     checkpoint = torch.load(os.path.join(args.save_path, 'best_model.pth'))
     Abs_Net.load_state_dict(checkpoint)
     eval_result = Evaluation(test_loader, abs_train_loader, model = Abs_Net, device = args.gpu)
