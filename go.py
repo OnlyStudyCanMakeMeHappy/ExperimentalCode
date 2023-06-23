@@ -114,10 +114,11 @@ def train(
         loss.backward()
         optimizer.step()
     end_time = time.time()
-    lossA , lossR = np.mean(lossAList) , np.mean(lossRList)
-    loss_total = lossA + args.Lambda * lossR
 
+    lossA = np.mean(lossAList)
     if args.fuse:
+        lossR = np.mean(lossRList)
+        loss_total = lossA + args.Lambda * lossR
         writer.add_scalars("loss" , {
             "lossA" : lossA,
             "lossR": lossR,
@@ -212,7 +213,7 @@ def main():
     else:
         hparams = runtime_env(args)
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
-    print("=" * 30 +" START TRAING" + "=" * 30)
+    print("#" * 30 +" START TRAING " + "#" * 30)
     best_acc = 0.0
     best_epoch = 0
     patience = 10
