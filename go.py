@@ -79,14 +79,19 @@ def train(
     Backbone.train()
     freeze_BN(Backbone)
     lossAList, lossRList = [] , []
+    gradAccum_R , gradAccum_A = len(rel_train_loader) , len(abs_train_loader)
+    # 梯度清零
+    optimizer.zero_grad()
+
     if args.fuse:
-        for idx, (data, pairs_indices, label) in enumerate(rel_train_loader):
+        for idx, (data , label) in enumerate(rel_train_loader):
             data = data.to(args.gpu , non_blocking = True)
+            pairs_indices , pairs_labels =  construct_partial_pairs(label)
             idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
             label = label.to(args.gpu)
             embedding = Rel_Net(data)
             x_embedding, y_embedding = embedding[idx] , embedding[idy]
-            loss1 = loss_funcA(torch.cat((x_embedding, y_embedding), dim = 1), label)
+            loss1 = loss_funcA(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
             aug_data = aug_transform(data)
             aug_embedding = Rel_Net(aug_data)[idx]
             loss2 = torch.mean(
@@ -96,13 +101,10 @@ def train(
                     args.varepsilon
                 )
             )
-            loss = loss1 + args.mu * loss2
-            #loss = loss1
-            lossRList.append(loss.item())
-            loss *= args.Lambda
-            optimizer.zero_grad()
+            lossRList.append(loss1.item() + args.mu * loss2.item())
+            loss = (loss1 + args.mu * loss2) * args.Lambda
+            loss = loss / gradAccum_R
             loss.backward()
-            optimizer.step()
 
     for idx,(image , label) in enumerate(abs_train_loader):
         image = image.to(args.gpu, non_blocking = True)
@@ -110,11 +112,12 @@ def train(
         embedding = Abs_Net(image)
         loss = loss_funcB(embedding, label)
         lossAList.append(loss.item())
-        optimizer.zero_grad()
+        loss = loss / gradAccum_A
         loss.backward()
-        optimizer.step()
-    end_time = time.time()
 
+    end_time = time.time()
+    # 梯度更新
+    optimizer.step()
     lossA = np.mean(lossAList)
     if args.fuse:
         lossR = np.mean(lossRList)
@@ -157,7 +160,7 @@ def main():
         }
         logger.critical(
             "The length of dataset : {dataset} , The size of test : {test} , "
-            "The size of absolute information : {abs_info}"
+            "The size of absolute information : {abs_info}, "
             "The size of relative information : {rel_info}".format(**details)
         )
 
@@ -191,7 +194,6 @@ def main():
         pin_memory=True,
         sampler=samplerR,
         num_workers=args.workers,
-        collate_fn = match_partial_pairs,
     )
     test_loader = DataLoader(
         test_dataset,
