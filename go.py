@@ -2,15 +2,13 @@ import argparse
 import time
 import torch.nn.functional
 import losses
-from model.embedding import Embedding
-from model.mlp import MLP
-import model.backbone as backbone
-from model import Model
+from model.Model import MultiTaskModel
 from utils.common import *
 from utils.data_utils import *
 from MPerClassSampler import MPerClassSampler
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience
+from torch.utils.data import DataLoader
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -101,6 +99,7 @@ def train(
                 )
             )
             loss = (loss1 + args.mu * loss2) * args.Lambda
+            # loss是平均损失, 当前mini-batch的损失 : batch_size * loss
             lossR.update(loss.item() / args.Lambda , label.size(0))
             loss = loss / gradAccum_R
             loss.backward()
@@ -136,7 +135,7 @@ def main():
     fix_seed(0)
     assert args.gpu is not None, "GPU is necessary"
 
-    model = Model.Model(f_dim = args.dim , g_dim = args.dim , g_hidden_size=512).to(args.gpu)
+    model = MultiTaskModel(f_dim = args.dim , g_dim = args.dim , g_hidden_size=512).to(args.gpu)
     base_transform, aug_transform, test_transform = get_transforms()
 
     dataset = args.data()

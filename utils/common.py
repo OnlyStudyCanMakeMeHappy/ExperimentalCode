@@ -81,10 +81,10 @@ def runtime_env(args , **kwargs):
 
 def record(hyper_params, metrics):
     with open("logs.txt" , 'a') as f:
-        f.write(dict2str(hyper_params) + '\n')
-        f.write(dict2str(metrics , "=") + '\n')        
-        #f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
-        f.write("\n.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.\n|=.--. |=.--. |=.--. |=.--. |=.--. |D.--. |E.--. |L.--. |I.--. |M.--. |I.--. |T.--. |E.--. |R.--. |=.--. |=.--. |=.--. |=.--. |=.--. |\n| (\\/) | (\\/) | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :/\\: | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :(): | (\\/) | (\\/) | (\\/) | (\\/) | (\\/) |\n| :\\/: | :\\/: | :\\/: | :\\/: | :\\/: | (__) | :\\/: | (__) | :\\/: | :\\/: | :\\/: | (__) | :\\/: | ()() | :\\/: | :\\/: | :\\/: | :\\/: | :\\/: |\n| '--'=| '--'=| '--'=| '--'=| '--'=| '--'D| '--'E| '--'L| '--'I| '--'M| '--'I| '--'T| '--'E| '--'R| '--'=| '--'=| '--'=| '--'=| '--'=|\n`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------'\n")
+        #f.write(dict2str(hyper_params) + '\n')
+        f.write(str(hyper_params)+ '\n')
+        f.write(dict2str(metrics , "=") + '\n')
+        f.write('\n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  --------------- \n-:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::- \n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------\n')
 def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     #test在reference中找topk
     #small query batch, small index: CPU is typically faster
@@ -96,7 +96,11 @@ def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     # I是一个 query_size * k 的二维下标
     # 四舍五入将浮点数转换为整数
     return reference_labels.numpy()[I[ : , 1 : ]]
-
+def predict(reference_embeddings, reference_labels,test_embeddings, k):
+    neigh = KNeighborsClassifier(n_neighbors=k)
+    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
+    pred = neigh.predict(test_embeddings.numpy())
+    return pred
 
 def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
@@ -139,11 +143,14 @@ def get_logger(logger_name = None):
     logger.addHandler(console)
     return logger
 
-def Evaluation(test_loader, train_loader, model, device = None ,k = 5):
+def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
+    """
     knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
     pred = np.round(np.mean(knn_indices, axis=1))
+    """
+    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
     return {
