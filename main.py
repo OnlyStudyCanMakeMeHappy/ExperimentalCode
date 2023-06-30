@@ -1,19 +1,13 @@
 import argparse
 import time
-import tqdm
-import numpy as np
-import math
 import torch.nn.functional
 import losses
 from model.Model import MultiTaskModel
-from model.embedding import Embedding
-from model.mlp import MLP
-import model.backbone as backbone
 from utils.common import *
 from utils.data_utils import *
 from MPerClassSampler import MPerClassSampler
 from torch.utils.tensorboard import SummaryWriter
-from datasets import FGNET, Adience
+from datasets import FGNET, Adience, UTKFace
 from torch.utils.data import DataLoader
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
@@ -32,6 +26,7 @@ parser.add_argument('--data', default = FGNET,
                     choices = {
                         "FGNET" : FGNET,
                         "Adience" : Adience,
+                        'UTKFace' : UTKFace,
                     } , action = ChoiceAction)
 parser.add_argument('--dim', default=64, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
@@ -108,7 +103,8 @@ def main_and_aux_task_train(
     random.shuffle(task_mask)
     iterA , iterR = iter(abs_train_loader) , iter(rel_train_loader)
     # asill = True, 123456789#
-    for task_id in tqdm.tqdm(task_mask, desc =f"Epoch:{epoch}/{args.epochs}" ,colour='green' , ncols = 80, ascii = True):
+    #for task_id in tqdm.tqdm(task_mask, desc =f"Epoch:{epoch}/{args.epochs}" ,colour='green' , ncols = 80, ascii = True):
+    for task_id in task_mask:
         if task_id == 1:
             data , label = next(iterR)
             data = data.to(args.gpu , non_blocking = True)
@@ -159,29 +155,30 @@ def train(
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-
     for (data, label) in rel_train_loader:
-            data = data.to(args.gpu , non_blocking = True)
-            pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
-            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-            #pairs_labels = pairs_labels.to(args.gpu)
-            embedding = model(data , 1)
-            x_embedding, y_embedding = embedding[idx] , embedding[idy]
-            loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
-            aug_data = aug_transform(data)
-            aug_embedding = model(aug_data , 1)[idx]
-            loss2 = torch.mean(
-                torch.nn.functional.relu(
-                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                    args.varepsilon
-                )
+        data = data.to(args.gpu , non_blocking = True)
+        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+        #pairs_labels = pairs_labels.to(args.gpu)
+        embedding = model(data , 1)
+        x_embedding, y_embedding = embedding[idx] , embedding[idy]
+        loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
+        aug_data = aug_transform(data)
+        aug_embedding = model(aug_data , 1)[idx]
+
+        loss2 = torch.mean(
+            torch.nn.functional.relu(
+                torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
+                torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
+                args.varepsilon
             )
-            loss = (loss1 + args.mu * loss2) * args.Lambda
-            lossR.update(loss.item() / args.Lambda , label.size(0))
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        )
+        loss = (loss1 + args.mu * loss2) * args.Lambda
+        lossR.update(loss.item() / args.Lambda , label.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
     for (image , label) in abs_train_loader:
         image = image.to(args.gpu, non_blocking = True)
@@ -285,14 +282,14 @@ def main():
     batch_size = P * args.K
     iter_per_epoch = len(rel_train_dataset) // batch_size if args.iter_per_epoch is None else args.iter_per_eopch
     samplerR = MPerClassSampler(
-        abs_train_dataset.labels,
+        rel_train_dataset.labels,
         batch_size=batch_size,
         m = args.K,
         iter_per_epoch = iter_per_epoch
     )
 
     rel_train_loader = DataLoader(
-        abs_train_dataset,
+        rel_train_dataset,
         pin_memory=True,
         batch_sampler=samplerR,
         num_workers=args.workers,
@@ -313,7 +310,8 @@ def main():
     if args.ls == 'multi_step':
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer , args.milestones, gamma=args.lr_decay_gamma)
     elif args.ls == 'cosine_anneal':
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer , T_max = args.epochs)
+        # 余弦退火，不重启
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer , T_max = args.epochs, eta_min=0, last_epoch=-1)
 
 
     loss_funcR , loss_funcA = losses.Tripletloss(args)
@@ -352,9 +350,8 @@ def main():
 
         if args.ls is not None:
             lr_scheduler.step()
-            print(lr_scheduler.get_last_lr())
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
-            res = Evaluation(test_loader = test_loader, train_loader=abs_train_loader, model = model, device=args.gpu)
+            res = Evaluation(test_loader = test_loader, train_loader=abs_train_loader, model = model, device=args.gpu, k = 5)
             for k , v in res.items():
                 print(f"{k} = {v}", end = ",")
             print()

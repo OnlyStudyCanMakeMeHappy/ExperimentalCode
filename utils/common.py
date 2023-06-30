@@ -45,10 +45,18 @@ def get_transforms(model: str = "ResNet50"):
         transforms.ToTensor(),
         normalize
     ])
+
+    s = 1
+    # 亮度、对比度、饱和度和色调
+    color_jitter = transforms.ColorJitter(
+        0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s
+    )
+
     aug_transform = transforms.Compose([
-        transforms.transforms.RandomResizedCrop(224),
-        transforms.RandomPerspective(distortion_scale=0.15, p=1),
-        transforms.ColorJitter([1., 1.1], [1., 1.1], [1., 1.1]),
+        transforms.RandomResizedCrop(224), # 随机裁剪缩放
+        transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+        transforms.RandomGrayscale(p=0.2), # 依概率转换为灰度图像
     ])
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),
@@ -56,7 +64,6 @@ def get_transforms(model: str = "ResNet50"):
         transforms.ToTensor(),
         normalize
     ])
-    #return base_transform, transform, aug_transform
     return base_transform, aug_transform, test_transform
 
 def dict2str(d , s = ':'):
@@ -144,6 +151,8 @@ def get_logger(logger_name = None):
     return logger
 
 def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
+    import time
+    start = time.time()
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
     """
@@ -153,11 +162,13 @@ def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
     pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
+    end = time.time()
+    print(f"Evaluate time cost :{end - start :.2f}")
     return {
     "ACC" : acc,
     "MAE" : mean_absolute_error(pred , test_labels),
     "MSE" : mean_squared_error(pred , test_labels),
-    "QWK" : cohen_kappa_score(test_labels, pred),
+    "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
 def get_embeddings_labels(data_loader, model, device = None):
