@@ -1,14 +1,10 @@
 import argparse
-import os
 import re
-import torch
-import numpy as np
 import torchvision.datasets as datasets
 from model.embedding import Embedding
 from model.mlp import MLP
 import model.backbone as backbone
 from torch.utils.data import DataLoader, Dataset
-import torchvision.transforms as transforms
 from PIL import Image
 import glob
 import pandas as pd
@@ -17,7 +13,7 @@ from losses import RankingLoss, TripleLoss
 from utils.common import *
 from pytorch_metric_learning.losses import MarginLoss, MultiSimilarityLoss
 import cv2
-from MPerClassSampler import MImagesPerClassSampler, MPerClassSampler
+from utils.MPerClassSampler import MPerClassSampler
 
 parser = argparse.ArgumentParser(description="Train Model")
 

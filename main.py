@@ -5,10 +5,8 @@ import losses
 from model.Model import MultiTaskModel
 from utils.common import *
 from utils.data_utils import *
-from MPerClassSampler import MPerClassSampler
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience, UTKFace
-from torch.utils.data import DataLoader
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -28,19 +26,20 @@ parser.add_argument('--data', default = FGNET,
                         "Adience" : Adience,
                         'UTKFace' : UTKFace,
                     } , action = ChoiceAction)
-parser.add_argument('--dim', default=64, type=int, help='embedding size')
+parser.add_argument('--dim', default= 128, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('-j', '--workers', default=4, type=int)
 
 #==============================Sampler==========================#
 parser.add_argument('--M', default = 8, type = int , help = 'MPerClassSampler of absolute information')
-parser.add_argument('--P', default = None, type = int)
+parser.add_argument('--P', default = 8, type = int)
 parser.add_argument('--K', default = 8, type = int)
 parser.add_argument('--iter_per_epoch', default=None, type=int)
 
 #==============================validate and save model==========================#
 parser.add_argument('--val_epoch' , default = 3, type = int)
 parser.add_argument('--save_path' , default = 'result')
+parser.add_argument('--knn' , dest='k' , default = 10, type = int)
 
 #==============================batch size==========================#
 parser.add_argument('--batch_size', default=64, type=int)
@@ -61,9 +60,9 @@ parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'marg
 parser.add_argument('--mu', default = 0.8,type = float)
 parser.add_argument('--Lambda', default = 0.8,type = float)
 # 绝对信息的margin
-parser.add_argument('--delta', default= 0.5,type = float)
-parser.add_argument('--vartheta', '-vt', default = 0.5,type = float)
-parser.add_argument('--varepsilon', '-ve', default=0.5, type = float)
+parser.add_argument('--delta', default= 0.1,type = float)
+parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
+parser.add_argument('--varepsilon', '-ve', default=0.1, type = float)
 
 args = parser.parse_args()
 
@@ -263,41 +262,11 @@ def main():
             "The size of absolute information : {abs_info}, "
             "The size of relative information : {rel_info}".format(**details)
         )
-######################################## Absolute information DataLoader #################################
-    samplerA = MPerClassSampler(
-        abs_train_dataset.labels,
-        batch_size = args.batch_size,
-        m = args.M,
-        iter_per_epoch = len(abs_train_dataset) // args.batch_size
-    )
-    abs_train_loader = DataLoader(
-        abs_train_dataset,
-        batch_sampler=samplerA,
-        pin_memory = True,
-        num_workers = args.workers
-    )
-
-######################################## Relative information DataLoader #################################
-    P = len(dataset.classes) if args.P is None else args.P
-    batch_size = P * args.K
-    iter_per_epoch = len(rel_train_dataset) // batch_size if args.iter_per_epoch is None else args.iter_per_eopch
-    samplerR = MPerClassSampler(
-        rel_train_dataset.labels,
-        batch_size=batch_size,
-        m = args.K,
-        iter_per_epoch = iter_per_epoch
-    )
-
-    rel_train_loader = DataLoader(
+    abs_train_loader , rel_train_loader = getLoader(
+        args,
+        abs_train_dataset ,
         rel_train_dataset,
-        pin_memory=True,
-        batch_sampler=samplerR,
-        num_workers=args.workers,
-    )
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size = args.eval_batch_size,
+        test_dataset
     )
 ######################################## Optimizer Configuration #################################
     params_group = [
@@ -315,16 +284,13 @@ def main():
 
 
     loss_funcR , loss_funcA = losses.Tripletloss(args)
-    if args.fuse:
-        hparams = runtime_env(args, **details)
-    else:
-        hparams = runtime_env(args)
+
+    hparams = runtime_env(args, **details)
+
     writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
     print("#" * 30 +" START TRAING " + "#" * 30)
 
     best_metric = np.Inf
-    best_epoch = 0
-    patience = 10
     for epoch in range(1 , args.epochs + 1):
         start_time = time.time()
         model.train()
@@ -351,15 +317,12 @@ def main():
         if args.ls is not None:
             lr_scheduler.step()
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
-            res = Evaluation(test_loader = test_loader, train_loader=abs_train_loader, model = model, device=args.gpu, k = 5)
-            for k , v in res.items():
-                print(f"{k} = {v}", end = ",")
-            print()
+            res = Evaluation(test_dataset,abs_train_dataset, model, args , k = args.k)
+            print(dict2str(res , '='))
+            writer.add_scalars("Metrics", res, epoch // args.val_epoch)
             metric = res['MAE']
-            #if acc > best_acc:
             if metric < best_metric:
                 best_metric = metric
-                best_epoch = epoch
                 torch.save(model.state_dict(), os.path.join(args.save_path , 'best_model.pth'))
                 with open(os.path.join(args.save_path , 'best_result.txt'), 'w') as f:
                     f.write(f'best_epoch : {epoch}\n')
@@ -368,11 +331,13 @@ def main():
             # if acc < best_acc and epoch - best_epoch >= patience:
             #     print(f"Early Stopping at Epoch:{epoch}")
             #     break
+
     checkpoint = torch.load(os.path.join(args.save_path, 'best_model.pth'))
     model.load_state_dict(checkpoint)
-    eval_result = Evaluation(test_loader, abs_train_loader, model, device = args.gpu)
+
+    eval_result = Evaluation(test_dataset, abs_train_dataset, model, args , k = args.k)
     logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
-    writer.add_hparams(hparams , eval_result)
+
     #record(hparams, eval_result)
     record(vars(args), eval_result)
 

@@ -5,7 +5,7 @@ import losses
 from model.Model import MultiTaskModel
 from utils.common import *
 from utils.data_utils import *
-from MPerClassSampler import MPerClassSampler
+from utils.MPerClassSampler import MPerClassSampler
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience
 from torch.utils.data import DataLoader

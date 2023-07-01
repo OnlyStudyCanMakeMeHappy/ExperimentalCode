@@ -5,7 +5,7 @@ from collections import defaultdict
 from torchvision.datasets import ImageFolder
 #
 #
-
+__all__ = ['MPerClassSampler']
 # 先随机选取k个类别,然后每个类别随机选取min(len(cls[k] ,p)个样本
 class MPerClassSampler(BatchSampler):
     # labels可以是ImageFloder, 也可以是所有数据的标签

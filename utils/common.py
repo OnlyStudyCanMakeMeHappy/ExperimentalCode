@@ -11,6 +11,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import cohen_kappa_score, mean_squared_error, mean_absolute_error
 import logging, colorlog
 import faiss
+from torch.utils.data import DataLoader
+import time
 
 def fix_seed(seed):
     random.seed(seed)
@@ -25,6 +27,14 @@ def freeze_BN(model):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
             m.eval()
+def timer(func):
+    def wrapper(*args , **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        print(f"Evaluate time cost :{end_time - start_time :.2f}")
+        return result
+    return wrapper
 
 
 # TODO: 根据模型做不同的transform, 特别是BnInception需要特别对待
@@ -74,7 +84,8 @@ def runtime_env(args , **kwargs):
         "batch_size":args.batch_size,
         "lr":args.lr,
         "epochs":args.epochs,
-        'delta' : args.delta
+        'delta' : args.delta,
+        'lr_schdeuler' : args.ls
     }    
     if args.fuse:
         base_hp["mu"] = args.mu
@@ -103,6 +114,7 @@ def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     # I是一个 query_size * k 的二维下标
     # 四舍五入将浮点数转换为整数
     return reference_labels.numpy()[I[ : , 1 : ]]
+
 def predict(reference_embeddings, reference_labels,test_embeddings, k):
     neigh = KNeighborsClassifier(n_neighbors=k)
     neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
@@ -150,11 +162,10 @@ def get_logger(logger_name = None):
     logger.addHandler(console)
     return logger
 
-def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
-    import time
-    start = time.time()
-    reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
-    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
+@timer
+def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
+    reference_embeddings, reference_labels = get_embeddings_labels(test_dataset, model, args)
+    test_embeddings, test_labels = get_embeddings_labels(test_dataset, model, args)
     """
     knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
     pred = np.round(np.mean(knn_indices, axis=1))
@@ -162,8 +173,6 @@ def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
     pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
-    end = time.time()
-    print(f"Evaluate time cost :{end - start :.2f}")
     return {
     "ACC" : acc,
     "MAE" : mean_absolute_error(pred , test_labels),
@@ -171,18 +180,26 @@ def Evaluation(test_loader, train_loader, model, device = None ,k = 10):
     "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
-def get_embeddings_labels(data_loader, model, device = None):
+def get_embeddings_labels(dataset, model, args):
     model.eval()
+    data_loader = DataLoader(
+        dataset ,
+        batch_size = 128,
+        shuffle = False,
+        drop_last = False,
+        num_workers=args.workers
+    )
     embeddings = torch.Tensor()
     labels = torch.LongTensor()
     with torch.no_grad():
         for (input, target) in (data_loader):
-            if device is not None:
-                input = input.cuda(device, non_blocking=True)
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
             output = model(input)
             embeddings = torch.cat((embeddings, output.cpu()), 0)
             labels = torch.cat((labels, target))
     return embeddings, labels
+
 
 
 

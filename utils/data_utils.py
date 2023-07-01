@@ -3,6 +3,9 @@ import numpy as np
 import torch
 from collections import defaultdict
 import random
+from MPerClassSampler import MPerClassSampler
+
+
 # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
 # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
 # 数据集打乱 np.random.permutation
@@ -206,6 +209,42 @@ def online_match(labels : torch.Tensor, r):
     L = min(M , len(new_labels))
     return np.array(pre_idx[ : L]) , np.array(succ_idx[ : L]), torch.tensor(new_labels[ : L])
 
+def getLoader(args , abs_train_dataset , rel_train_dataset, test_dataset):
+    ######################################## Absolute information DataLoader #################################
+    samplerA = MPerClassSampler(
+        abs_train_dataset.labels,
+        batch_size=args.batch_size,
+        m=args.M,
+        iter_per_epoch=(len(abs_train_dataset) + args.batch_size - 1) // args.batch_size
+    )
+    abs_train_loader = DataLoader(
+        abs_train_dataset,
+        batch_sampler=samplerA,
+        pin_memory=True,
+        num_workers=args.workers
+    )
+
+    ######################################## Relative information DataLoader #################################
+    # P = len(dataset.classes) if args.P is None else args.P
+    P = args.P
+    batch_size = P * args.K
+    iter_per_epoch = (len(rel_train_dataset) + batch_size - 1)// batch_size if args.iter_per_epoch is None else args.iter_per_eopch
+    samplerR = MPerClassSampler(
+        rel_train_dataset.labels,
+        batch_size=batch_size,
+        m=args.K,
+        iter_per_epoch=iter_per_epoch
+    )
+
+    rel_train_loader = DataLoader(
+        rel_train_dataset,
+        pin_memory=True,
+        batch_sampler=samplerR,
+        num_workers=args.workers,
+    )
+
+
+    return abs_train_loader , rel_train_loader
 
 if __name__ == "__main__":
     # 用法
