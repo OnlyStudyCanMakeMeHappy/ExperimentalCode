@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import glob
 import pandas as pd
 from PIL import Image
+import cv2
 
 class Adience(Dataset):
     root = '/home/tuijiansuanfa/users/cjx/data/Adience'
@@ -48,7 +49,9 @@ class Adience(Dataset):
         return len(self.image_path)
 
     def __getitem__(self, item):
-        image = Image.open(self.image_path[item])
+        #image = Image.open(self.image_path[item])
+        image = cv2.cvtColor(cv2.imread(self.image_path[item]), cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(image)
         #image = self.images[item]
         label = self.labels[item]
         if self.transform is not None:

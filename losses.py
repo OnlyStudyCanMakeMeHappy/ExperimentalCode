@@ -1,5 +1,6 @@
 from pytorch_metric_learning.losses import TripletMarginLoss,MarginLoss, MultiSimilarityLoss
 from pytorch_metric_learning.distances import BaseDistance
+from pytorch_metric_learning.reducers import MeanReducer
 from pytorch_metric_learning.utils import loss_and_miner_utils as lmu
 import torch
 
@@ -30,6 +31,7 @@ class DPair(BaseDistance):
 
 def Tripletloss(args):
     dist_pair = DPair()
-    loss_funcA = TripletMarginLoss(distance=dist_pair, margin = args.vartheta)
-    loss_funcB = TripletMarginLoss(margin = args.delta)
-    return loss_funcA, loss_funcB
+    # default -> AvgNonZeroReducer
+    loss_funcR = TripletMarginLoss(distance=dist_pair, margin = args.vartheta, reducer = MeanReducer())
+    loss_funcA = TripletMarginLoss(margin = args.delta, reducer = MeanReducer())
+    return loss_funcR, loss_funcA

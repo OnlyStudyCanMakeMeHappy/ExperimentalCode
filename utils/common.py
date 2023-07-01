@@ -11,6 +11,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import cohen_kappa_score, mean_squared_error, mean_absolute_error
 import logging, colorlog
 import faiss
+from torch.utils.data import DataLoader
+import time
 
 def fix_seed(seed):
     random.seed(seed)
@@ -25,6 +27,14 @@ def freeze_BN(model):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
             m.eval()
+def timer(func):
+    def wrapper(*args , **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        print(f"Evaluate time cost :{end_time - start_time :.2f}")
+        return result
+    return wrapper
 
 
 # TODO: 根据模型做不同的transform, 特别是BnInception需要特别对待
@@ -45,10 +55,18 @@ def get_transforms(model: str = "ResNet50"):
         transforms.ToTensor(),
         normalize
     ])
+
+    s = 1
+    # 亮度、对比度、饱和度和色调
+    color_jitter = transforms.ColorJitter(
+        0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s
+    )
+
     aug_transform = transforms.Compose([
-        transforms.transforms.RandomResizedCrop(224),
-        transforms.RandomPerspective(distortion_scale=0.15, p=1),
-        transforms.ColorJitter([1., 1.1], [1., 1.1], [1., 1.1]),
+        transforms.RandomResizedCrop(224), # 随机裁剪缩放
+        transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+        transforms.RandomGrayscale(p=0.2), # 依概率转换为灰度图像
     ])
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),
@@ -56,7 +74,6 @@ def get_transforms(model: str = "ResNet50"):
         transforms.ToTensor(),
         normalize
     ])
-    #return base_transform, transform, aug_transform
     return base_transform, aug_transform, test_transform
 
 def dict2str(d , s = ':'):
@@ -67,7 +84,8 @@ def runtime_env(args , **kwargs):
         "batch_size":args.batch_size,
         "lr":args.lr,
         "epochs":args.epochs,
-        'delta' : args.delta
+        'delta' : args.delta,
+        'lr_schdeuler' : args.ls
     }    
     if args.fuse:
         base_hp["mu"] = args.mu
@@ -81,10 +99,10 @@ def runtime_env(args , **kwargs):
 
 def record(hyper_params, metrics):
     with open("logs.txt" , 'a') as f:
-        f.write(dict2str(hyper_params) + '\n')
-        f.write(dict2str(metrics , "=") + '\n')        
-        #f.write('\n===***===***===***===***===***===***===\n/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\\/\n===***===***===***===***===***===***===\n')
-        f.write("\n.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.------.\n|=.--. |=.--. |=.--. |=.--. |=.--. |D.--. |E.--. |L.--. |I.--. |M.--. |I.--. |T.--. |E.--. |R.--. |=.--. |=.--. |=.--. |=.--. |=.--. |\n| (\\/) | (\\/) | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :/\\: | (\\/) | (\\/) | (\\/) | :/\\: | (\\/) | :(): | (\\/) | (\\/) | (\\/) | (\\/) | (\\/) |\n| :\\/: | :\\/: | :\\/: | :\\/: | :\\/: | (__) | :\\/: | (__) | :\\/: | :\\/: | :\\/: | (__) | :\\/: | ()() | :\\/: | :\\/: | :\\/: | :\\/: | :\\/: |\n| '--'=| '--'=| '--'=| '--'=| '--'=| '--'D| '--'E| '--'L| '--'I| '--'M| '--'I| '--'T| '--'E| '--'R| '--'=| '--'=| '--'=| '--'=| '--'=|\n`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------`------'\n")
+        #f.write(dict2str(hyper_params) + '\n')
+        f.write(str(hyper_params)+ '\n')
+        f.write(dict2str(metrics , "=") + '\n')
+        f.write('\n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  --------------- \n-:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::- \n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------\n')
 def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     #test在reference中找topk
     #small query batch, small index: CPU is typically faster
@@ -97,6 +115,11 @@ def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
     # 四舍五入将浮点数转换为整数
     return reference_labels.numpy()[I[ : , 1 : ]]
 
+def predict(reference_embeddings, reference_labels,test_embeddings, k):
+    neigh = KNeighborsClassifier(n_neighbors=k)
+    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
+    pred = neigh.predict(test_embeddings.numpy())
+    return pred
 
 def compute_c_index(labels : numpy.ndarray, predict):
     n = labels.shape[0]
@@ -139,32 +162,44 @@ def get_logger(logger_name = None):
     logger.addHandler(console)
     return logger
 
-def Evaluation(test_loader, train_loader, model, device = None ,k = 5):
-    reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, device)
-    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, device)
+@timer
+def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
+    reference_embeddings, reference_labels = get_embeddings_labels(test_dataset, model, args)
+    test_embeddings, test_labels = get_embeddings_labels(test_dataset, model, args)
+    """
     knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
     pred = np.round(np.mean(knn_indices, axis=1))
+    """
+    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
     return {
     "ACC" : acc,
     "MAE" : mean_absolute_error(pred , test_labels),
     "MSE" : mean_squared_error(pred , test_labels),
-    "QWK" : cohen_kappa_score(test_labels, pred),
+    "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
-def get_embeddings_labels(data_loader, model, device = None):
+def get_embeddings_labels(dataset, model, args):
     model.eval()
+    data_loader = DataLoader(
+        dataset ,
+        batch_size = 128,
+        shuffle = False,
+        drop_last = False,
+        num_workers=args.workers
+    )
     embeddings = torch.Tensor()
     labels = torch.LongTensor()
     with torch.no_grad():
         for (input, target) in (data_loader):
-            if device is not None:
-                input = input.cuda(device, non_blocking=True)
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
             output = model(input)
             embeddings = torch.cat((embeddings, output.cpu()), 0)
             labels = torch.cat((labels, target))
     return embeddings, labels
+
 
 
 

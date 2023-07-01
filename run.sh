@@ -1,10 +1,4 @@
 #!/bin/bash
-python go.py --gpu $1 --delta 0.75 --batch_size 20 --epochs 100
-python go.py --gpu $1 --delta 0.75 --batch_size 32 --epochs 100
-python go.py --gpu $1 --delta 0.75 --batch_size 64 --epochs 100
-python go.py --gpu $1 --delta 0.5 --batch_size 64 --epochs 100
-python go.py --gpu $1 --delta 0.05 --batch_size 64 --epochs 100
-python go.py --gpu $1 --delta 0.1 --batch_size 64 --epochs 100
-python go.py --gpu $1 --delta 1.0 --batch_size 64 --epochs 100
-python go.py --gpu $1 --delta 0.75 -vt 0.75 -ve 0.75 --batch_size 64 --epochs 100 --fuse
-python go.py --gpu $1 --delta 0.75 -vt 1.0 -ve 1.0 --batch_size 64 --epochs 100 --fuse
+python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls multi_step --lr 1e-4 -j 8 --val_epoch 1
+python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls multi_step --lr 1e-4 --fuse -j 8 --val_epoch 1
+python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls cosine_anneal --lr 1e-4 --fuse -j 8 --val_epoch 1
