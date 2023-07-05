@@ -1,5 +1,8 @@
 import argparse
-import time
+import os
+import time, math
+
+import numpy as np
 import torch.nn.functional
 import losses
 from model.Model import MultiTaskModel
@@ -7,6 +10,9 @@ from utils.common import *
 from utils.data_utils import *
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience, UTKFace
+import datetime
+import json
+
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -20,6 +26,7 @@ class ChoiceAction(argparse.Action):
         """
         setattr(namespace, self.dest, self.choices[value])
 # worker -> windows : 0
+parser.add_argument('--gpu', default=None, type=int, required = True)
 parser.add_argument('--data', default = FGNET,
                     choices = {
                         "FGNET" : FGNET,
@@ -29,6 +36,12 @@ parser.add_argument('--data', default = FGNET,
 parser.add_argument('--dim', default= 128, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('-j', '--workers', default=4, type=int)
+parser.add_argument('--backbone' , default = 'resnet50' , type = str, help = 'The backbone of model')
+
+#==============================Record==========================#
+parser.add_argument('--record', action = 'store_true')
+parser.add_argument('--save_path' , default = 'result')
+parser.add_argument('--log_dir' , default = 'runs')
 
 #==============================Sampler==========================#
 parser.add_argument('--M', default = 8, type = int , help = 'MPerClassSampler of absolute information')
@@ -37,23 +50,22 @@ parser.add_argument('--K', default = 8, type = int)
 parser.add_argument('--iter_per_epoch', default=None, type=int)
 
 #==============================validate and save model==========================#
-parser.add_argument('--val_epoch' , default = 3, type = int)
-parser.add_argument('--save_path' , default = 'result')
+parser.add_argument('--val_epoch' , default = 1, type = int)
 parser.add_argument('--knn' , dest='k' , default = 10, type = int)
 
 #==============================batch size==========================#
 parser.add_argument('--batch_size', default=64, type=int)
-parser.add_argument('--eval_batch_size', default=120, type=int)
+parser.add_argument('--eval_batch_size', default=256, type=int)
 
-#==============================learning rate==========================#
-parser.add_argument('--lr', default=1e-5, type=float)
+#==============================optimizer and scheduler==========================#
+parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--weight_decay', default=1e-5, type=float)
-parser.add_argument('--lr_scheduler', '-ls', dest = 'ls', default = None ,choices = ['multi_step' , 'cosine_anneal']) #dest: specify the attribute name used in the result name
-parser.add_argument('--milestones' , default = [30 , 60, 90] , nargs = "+")
-parser.add_argument('--lr_decay_gamma' , default = 0.1 , type=float)
-parser.add_argument('--warm_up_epochs' , default = 10 , type=float)
+parser.add_argument('--lr_scheduler', '-ls', dest = 'ls', default = 'multi_step' ,type = str , choices = ['multi_step' , 'cosine_anneal']) #dest: specify the attribute name used in the result name
+parser.add_argument('--milestones' , default = [30 , 60, 90] , nargs = "+", type = int)
+parser.add_argument('--lr_decay_gamma' , default = 0.1 , type = float)
+parser.add_argument('--warm_up_epochs' , default = 10 , type = int)
 
-parser.add_argument('--gpu', default=None, type=int, required = True)
+
 #==============================hyper parameters of relative information==============================#
 parser.add_argument('--fuse' , action = "store_true", help = "whether fuse the relative information")
 parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'margin'])
@@ -64,6 +76,7 @@ parser.add_argument('--delta', default= 0.1,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
 parser.add_argument('--varepsilon', '-ve', default=0.1, type = float)
 
+
 args = parser.parse_args()
 
 def dml_train(
@@ -71,7 +84,6 @@ def dml_train(
         loss_func,
         abs_train_loader,
         optimizer,
-        epoch
 ):
     lossA = AverageMeter()
     #for (image , label) in tqdm.tqdm(abs_train_loader, desc =f"Epoch:{epoch}/{args.epochs}" ,colour='blue' , ncols = 100, ascii = True):
@@ -93,8 +105,7 @@ def main_and_aux_task_train(
         rel_train_loader,
         abs_train_loader ,
         aug_transform,
-        optimizer,
-        epoch
+        optimizer
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
@@ -150,7 +161,6 @@ def train(
     abs_train_loader ,
     aug_transform,
     optimizer,
-    epoch,
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
@@ -199,7 +209,6 @@ def same_iterations_train(
         abs_train_loader ,
         aug_transform,
         optimizer,
-        epoch
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
@@ -241,15 +250,20 @@ def same_iterations_train(
 def main():
     fix_seed(0)
 
-    model = MultiTaskModel(f_dim = args.dim , g_dim = args.dim , g_hidden_size=512).to(args.gpu)
+    model = MultiTaskModel(f_dim = args.dim , g_dim = args.dim , g_hidden_size=512, Backbone = args.backbone).to(args.gpu)
 
     base_transform, aug_transform, test_transform = get_transforms()
 
     dataset = args.data()
+    dataset_name = dataset.__class__.__name__
+
     abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.9, 0.1, tx=base_transform,ty=test_transform)
+    print(np.unique(abs_train_dataset.labels, return_counts = True))
+    print(np.unique(test_dataset.labels, return_counts = True))
+    #abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.8, 0.1, tx=base_transform,ty=test_transform)
     # getlogger
     logger = get_logger()
-    details = None
+
     if args.fuse:
         details = {
             "dataset": len(dataset),
@@ -268,7 +282,12 @@ def main():
         rel_train_dataset,
         test_dataset
     )
-######################################## Optimizer Configuration #################################
+
+#===================================================================================================#
+#                                                                                                   #
+#                       Optimizer and learning rate scheduler Configuration                         #
+#                                                                                                   #
+#===================================================================================================#
     params_group = [
         {'params': model.backbone.parameters(), 'lr': args.lr},
         {'params': model.f_head.parameters(), 'lr': args.lr * 10},
@@ -278,68 +297,110 @@ def main():
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
     if args.ls == 'multi_step':
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer , args.milestones, gamma=args.lr_decay_gamma)
+        if args.warm_up_epochs:
+            warm_up_with_multistep_lr = lambda epoch: epoch / args.warm_up_epochs if epoch <= args.warm_up_epochs \
+                else args.lr_decay_gamma ** len([m for m in args.milestones if m <= epoch])
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warm_up_with_multistep_lr)
+
     elif args.ls == 'cosine_anneal':
         # 余弦退火，不重启
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer , T_max = args.epochs, eta_min=0, last_epoch=-1)
-
+        # lr = et_min + 0.5 * (initial_et - et_min) * (1 + cos(pi * epoch / T_max))
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer , T_max = args.epochs, eta_min=args.lr * 0.001, last_epoch=-1)
+        if args.warm_up_epochs:
+            et_min = args.lr * 0.001
+            warm_up_with_cosine_lr = lambda epoch: epoch / args.warm_up_epochs if epoch <= args.warm_up_epochs \
+                else et_min + 0.5 * (args.lr - et_min) * (math.cos((epoch - args.warm_up_epochs) / (args.epochs - args.warm_up_epochs) * math.pi) + 1)
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warm_up_with_cosine_lr)
 
     loss_funcR , loss_funcA = losses.Tripletloss(args)
 
-    hparams = runtime_env(args, **details)
+    hparams = runtime_env(args)
 
-    writer = SummaryWriter(os.path.join("runs" , dict2str(hparams)))
-    print("#" * 30 +" START TRAING " + "#" * 30)
+    print("#" * 10 + '=' * 20 +" START TRAING " + "=" * 20 + '#' *  10)
 
     best_metric = np.Inf
+    # 将开始时间作为文件名
+    if args.record:
+        # result/Dataset_name/EXPmonthday/H:M
+        now = datetime.datetime.now()
+
+        time_str = now.strftime("%m%d-%H:%M")
+        # runs/{dataset_name}/{date_time}
+        writer = SummaryWriter(os.path.join(args.log_dir , dataset_name, time_str))
+        day_str , _ = time_str.split('-')
+
+        result_root = os.path.join(args.save_path,dataset_name, "EXP" + day_str, "EXP" + time_str)
+        if not os.path.exists(result_root):
+            os.makedirs(result_root)
+        # 创建实验目录
+        #os.makedirs(result_root) , 递归创建
+
+        with open(os.path.join(result_root , 'params.json'), 'w') as f:
+            args.data = dataset_name
+            json.dump(vars(args) , f, indent = 4)
+
+        model_save_path = os.path.join(result_root, 'best_model.pth')
+    ####
+
     for epoch in range(1 , args.epochs + 1):
-        start_time = time.time()
+        start_time = time.perf_counter()
         model.train()
         freeze_BN(model)
         if args.fuse:
-            #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer,epoch)
-            #lossA, lossR = same_iterations_train(model, loss_funcR, loss_funcA, rel_train_loader, abs_train_loader,aug_transform, optimizer, epoch)
-            lossA , lossR = train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer,epoch)
+            #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            #lossA, lossR = same_iterations_train(model, loss_funcR, loss_funcA, rel_train_loader, abs_train_loader,aug_transform, optimizer)
+            lossA , lossR = train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
-            writer.add_scalars("loss", {
+            if args.record:
+                writer.add_scalars("loss", {
                 "lossA": lossA,
                 "lossR": lossR,
                 "loss_total": loss_total,
             }, epoch)
-            end_time = time.time()
+            end_time = time.perf_counter()
             logger.info(
                 f" Epoch:{epoch} ==> lossA : {lossA} , lossR : {lossR}, loss_total : {loss_total} , time_cost : {end_time - start_time : .2f}s")
         else:
-            lossA = dml_train(model , loss_funcA, abs_train_loader, optimizer, epoch)
-            end_time = time.time()
-            writer.add_scalar('only_absolute_information', lossA, epoch)
+            lossA = dml_train(model , loss_funcA, abs_train_loader, optimizer)
+            end_time = time.perf_counter()
+            if args.record:
+                writer.add_scalar('only_absolute_information', lossA, epoch)
             logger.info(f" Epoch:{epoch} ==> lossA : {lossA} , time_cost = {end_time - start_time:.2f}s")
 
         if args.ls is not None:
             lr_scheduler.step()
+#            print(lr_scheduler.get_last_lr())
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
             res = Evaluation(test_dataset,abs_train_dataset, model, args , k = args.k)
+
             print(dict2str(res , '='))
-            writer.add_scalars("Metrics", res, epoch // args.val_epoch)
+            if args.record:
+                writer.add_scalars("Metrics", res, epoch // args.val_epoch)
             metric = res['MAE']
             if metric < best_metric:
                 best_metric = metric
-                torch.save(model.state_dict(), os.path.join(args.save_path , 'best_model.pth'))
-                with open(os.path.join(args.save_path , 'best_result.txt'), 'w') as f:
-                    f.write(f'best_epoch : {epoch}\n')
-                    for k, v in res.items():
-                        f.write(f'best {k} : {v}\n')
+                if args.record:
+                    #torch.save(model.state_dict(), model_save_path)
+                    with open(os.path.join(result_root , 'best_result.txt'), 'w') as f:
+                        f.write(f'Epoch : {epoch}\n')
+                        for k, v in res.items():
+                            f.write(f'{k} : {v}\n')
+
             # if acc < best_acc and epoch - best_epoch >= patience:
             #     print(f"Early Stopping at Epoch:{epoch}")
             #     break
 
-    checkpoint = torch.load(os.path.join(args.save_path, 'best_model.pth'))
-    model.load_state_dict(checkpoint)
+    ### show the best metric
+    if args.record:
+        with open(os.path.join(result_root, 'best_result.txt')) as f:
+            eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
+            #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
+            logger.info(eval_results)
+        record(vars(args), eval_results)
 
-    eval_result = Evaluation(test_dataset, abs_train_dataset, model, args , k = args.k)
-    logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_result))
-
-    #record(hparams, eval_result)
-    record(vars(args), eval_result)
+    # checkpoint = torch.load(model_save_path)
+    # model.load_state_dict(checkpoint)
+    # eval_results = Evaluation(test_dataset, abs_train_dataset, model, args , k = args.k)
 
 
 

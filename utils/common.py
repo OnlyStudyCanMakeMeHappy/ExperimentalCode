@@ -65,9 +65,10 @@ def get_transforms(model: str = "ResNet50"):
     aug_transform = transforms.Compose([
         transforms.RandomResizedCrop(224), # 随机裁剪缩放
         transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
         transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
-        transforms.RandomGrayscale(p=0.2), # 依概率转换为灰度图像
     ])
+
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.CenterCrop((224, 224)),
@@ -101,19 +102,35 @@ def record(hyper_params, metrics):
     with open("logs.txt" , 'a') as f:
         #f.write(dict2str(hyper_params) + '\n')
         f.write(str(hyper_params)+ '\n')
-        f.write(dict2str(metrics , "=") + '\n')
+        if isinstance(metrics , dict):
+            f.write(dict2str(metrics , "=") + '\n')
+        elif isinstance(metrics , str):
+            f.write(metrics)
         f.write('\n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  --------------- \n-:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::- \n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------\n')
-def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
-    #test在reference中找topk
-    #small query batch, small index: CPU is typically faster
-    dim = reference_embeddings.size(1)
-    index = faiss.IndexFlatL2(dim)
-    index.add(reference_embeddings.numpy())
-    # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
-    D, I = index.search(query_embeddings.numpy() , k + 1)
-    # I是一个 query_size * k 的二维下标
-    # 四舍五入将浮点数转换为整数
-    return reference_labels.numpy()[I[ : , 1 : ]]
+# def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
+#     #test在reference中找topk
+#     #small query batch, small index: CPU is typically faster
+#     dim = reference_embeddings.size(1)
+#     index = faiss.IndexFlatL2(dim)
+#     index.add(reference_embeddings.numpy())
+#     # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
+#     D, I = index.search(query_embeddings.numpy() , k + 1)
+#     # I是一个 query_size * k 的二维下标
+#     # 四舍五入将浮点数转换为整数
+#     return reference_labels.numpy()[I[ : , 1 : ]]
+
+def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k, metric = "Cosine"):
+    if metric == 'Cosine':
+    # 计算距离矩阵, 进行了L2 normalize, 直接计算点积即可
+        dist_matrix = torch.mm(query_embeddings, reference_embeddings.T)
+    # dim = 1 , 沿着dim = 1的方向, 计算每一行的topk
+    elif metric == 'L2':
+        #cdist doesn't work for float16
+        if reference_embeddings.dtype == torch.float16:
+            raise Exception("The tensor type is torch.float16 which is not support of cdist ")
+        dist_matrix = -torch.cdist(query_embeddings, reference_embeddings)
+    _ , knn_indices = torch.topk(dist_matrix , k , dim = 1)
+    return reference_labels[knn_indices].numpy()
 
 def predict(reference_embeddings, reference_labels,test_embeddings, k):
     neigh = KNeighborsClassifier(n_neighbors=k)
@@ -166,11 +183,11 @@ def get_logger(logger_name = None):
 def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
     reference_embeddings, reference_labels = get_embeddings_labels(test_dataset, model, args)
     test_embeddings, test_labels = get_embeddings_labels(test_dataset, model, args)
-    """
+
     knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
     pred = np.round(np.mean(knn_indices, axis=1))
-    """
-    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
+
+#    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
     return {
@@ -184,7 +201,7 @@ def get_embeddings_labels(dataset, model, args):
     model.eval()
     data_loader = DataLoader(
         dataset ,
-        batch_size = 128,
+        batch_size = args.eval_batch_size,
         shuffle = False,
         drop_last = False,
         num_workers=args.workers

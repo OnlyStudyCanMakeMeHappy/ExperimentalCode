@@ -202,7 +202,7 @@ def online_match(labels : torch.Tensor, r):
             if labels[i] == labels[j]: continue
             a = 1 if labels[i] > labels[j] else 0
             pre_idx.extend([i , j])
-            succ_idx.extend([j , ])
+            succ_idx.extend([j , i])
             new_labels.extend([a , a ^ 1])
             if len(new_labels) > M:
                 break

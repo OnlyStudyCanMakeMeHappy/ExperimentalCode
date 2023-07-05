@@ -40,4 +40,8 @@ class UTKFace(Dataset):
         if self.transform is not None:
             image = self.transform(image)
         label = self.labels[item]
-        return image, label
+        return image,label
+
+if __name__ == "__main__":
+    dataset = UTKFace()
+    print(dataset.__class__.__name__)

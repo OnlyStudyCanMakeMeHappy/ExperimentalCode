@@ -7,10 +7,16 @@ __all__ = ['MultiTaskModel']
 class MultiTaskModel(nn.Module):
     def __init__(self ,  f_dim, g_dim, g_hidden_size ,Backbone = "resnet50"):
         super(MultiTaskModel, self).__init__()
-        if Backbone == "resnet50":
-            self.backbone = ResNet50()
-        elif Backbone == "resnet18":
-            self.backbone = ResNet18()
+        BackboneOptions = {
+            'resnet18' : ResNet18(),
+            'resnet50': ResNet50(),
+        }
+        self.backbone = None
+        try:
+            self.backbone = BackboneOptions[Backbone]
+        except KeyError:
+            print(f"The Backbone must be one of {list(BackboneOptions.keys())}")
+
         #TODO : Other baseline
         output_size = self.backbone.output_size
         self.f_head = Embedding(output_size , f_dim)
