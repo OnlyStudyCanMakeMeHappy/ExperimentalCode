@@ -107,6 +107,7 @@ def record(hyper_params, metrics):
         elif isinstance(metrics , str):
             f.write(metrics)
         f.write('\n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  --------------- \n-:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::- \n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------\n')
+
 # def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
 #     #test在reference中找topk
 #     #small query batch, small index: CPU is typically faster
@@ -118,7 +119,6 @@ def record(hyper_params, metrics):
 #     # I是一个 query_size * k 的二维下标
 #     # 四舍五入将浮点数转换为整数
 #     return reference_labels.numpy()[I[ : , 1 : ]]
-
 def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k, metric = "Cosine"):
     if metric == 'Cosine':
     # 计算距离矩阵, 进行了L2 normalize, 直接计算点积即可
@@ -180,14 +180,15 @@ def get_logger(logger_name = None):
     return logger
 
 @timer
-def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
-    reference_embeddings, reference_labels = get_embeddings_labels(test_dataset, model, args)
-    test_embeddings, test_labels = get_embeddings_labels(test_dataset, model, args)
+#def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
+def Evaluation(test_loader, train_loader, model ,args):
+    reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, args)
+    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
 
-    knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
+    knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, args.k)
     pred = np.round(np.mean(knn_indices, axis=1))
 
-#    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
+    #pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
     return {
@@ -197,19 +198,12 @@ def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
     "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
-def get_embeddings_labels(dataset, model, args):
+def get_embeddings_labels(data_loader, model, args):
     model.eval()
-    data_loader = DataLoader(
-        dataset ,
-        batch_size = args.eval_batch_size,
-        shuffle = False,
-        drop_last = False,
-        num_workers=args.workers
-    )
     embeddings = torch.Tensor()
     labels = torch.LongTensor()
     with torch.no_grad():
-        for (input, target) in (data_loader):
+        for (input, target) in data_loader:
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
             output = model(input)

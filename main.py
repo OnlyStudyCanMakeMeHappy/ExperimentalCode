@@ -68,9 +68,10 @@ parser.add_argument('--warm_up_epochs' , default = 10 , type = int)
 
 #==============================hyper parameters of relative information==============================#
 parser.add_argument('--fuse' , action = "store_true", help = "whether fuse the relative information")
+parser.add_argument('--aug', action = 'store_true', help = 'Whether to do data augmentation for the head samples')
 parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'margin'])
 parser.add_argument('--mu', default = 0.8,type = float)
-parser.add_argument('--Lambda', default = 0.8,type = float)
+parser.add_argument('--Lambda', default = 1.0 ,type = float)
 # 绝对信息的margin
 parser.add_argument('--delta', default= 0.1,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
@@ -153,54 +154,6 @@ def main_and_aux_task_train(
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
 
-def train(
-    model,
-    loss_funcR,
-    loss_funcA,
-    rel_train_loader,
-    abs_train_loader ,
-    aug_transform,
-    optimizer,
-):
-    lossA = AverageMeter()
-    lossR = AverageMeter()
-    for (data, label) in rel_train_loader:
-        data = data.to(args.gpu , non_blocking = True)
-        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
-        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-        #pairs_labels = pairs_labels.to(args.gpu)
-        embedding = model(data , 1)
-        x_embedding, y_embedding = embedding[idx] , embedding[idy]
-        loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
-        aug_data = aug_transform(data)
-        aug_embedding = model(aug_data , 1)[idx]
-
-        loss2 = torch.mean(
-            torch.nn.functional.relu(
-                torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                args.varepsilon
-            )
-        )
-        loss = (loss1 + args.mu * loss2) * args.Lambda
-        lossR.update(loss.item() / args.Lambda , label.size(0))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    for (image , label) in abs_train_loader:
-        image = image.to(args.gpu, non_blocking = True)
-        label = label.to(args.gpu, non_blocking = True)
-        embedding = model(image)
-        loss = loss_funcA(embedding, label)
-        lossA.update(loss.item() , label.size(0))
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    return lossA.avg , lossR.avg
-
 def same_iterations_train(
         model,
         loss_funcR,
@@ -247,6 +200,55 @@ def same_iterations_train(
 
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
+def train(
+    model,
+    loss_funcR,
+    loss_funcA,
+    rel_train_loader,
+    abs_train_loader ,
+    aug_transform,
+    optimizer,
+):
+    lossA = AverageMeter()
+    lossR = AverageMeter()
+    for (data, label) in rel_train_loader:
+        data = data.to(args.gpu , non_blocking = True)
+        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+        #pairs_labels = pairs_labels.to(args.gpu)
+        embedding = model(data , 1)
+        x_embedding, y_embedding = embedding[idx] , embedding[idy]
+        loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
+        aug_data = aug_transform(data)
+        aug_embedding = model(aug_data , 1)[idx]
+        loss = args.Lambda * loss1
+        if args.aug:
+            loss2 = torch.mean(
+                torch.nn.functional.relu(
+                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
+                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
+                    args.varepsilon
+                )
+            )
+            loss += loss2 * args.Lambda
+
+        lossR.update(loss.item() / args.Lambda , label.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    for (image , label) in abs_train_loader:
+        image = image.to(args.gpu, non_blocking = True)
+        label = label.to(args.gpu, non_blocking = True)
+        embedding = model(image)
+        loss = loss_funcA(embedding, label)
+        lossA.update(loss.item() , label.size(0))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
 
@@ -254,33 +256,26 @@ def main():
 
     base_transform, aug_transform, test_transform = get_transforms()
 
+# ===================================================================================================#
+#                                         Dataset Related                                            #
+# ===================================================================================================#
     dataset = args.data()
     dataset_name = dataset.__class__.__name__
 
-    abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.9, 0.1, tx=base_transform,ty=test_transform)
-    print(np.unique(abs_train_dataset.labels, return_counts = True))
-    print(np.unique(test_dataset.labels, return_counts = True))
+    spilt_datasets = process_dataset(dataset, 0.8, 0.1, tx=base_transform,ty=test_transform)
+    details_info_print(spilt_datasets , dataset.classes)
+    abs_train_dataset, rel_train_dataset, test_dataset, val_dataset = spilt_datasets.values()
+
     #abs_train_dataset, rel_train_dataset, test_dataset = process_dataset(dataset, 0.8, 0.1, tx=base_transform,ty=test_transform)
     # getlogger
     logger = get_logger()
 
-    if args.fuse:
-        details = {
-            "dataset": len(dataset),
-            "test": len(test_dataset),
-            "abs_info": len(abs_train_dataset),
-            "rel_info" : len(rel_train_dataset),
-        }
-        logger.critical(
-            "The length of dataset : {dataset} , The size of test : {test} , "
-            "The size of absolute information : {abs_info}, "
-            "The size of relative information : {rel_info}".format(**details)
-        )
-    abs_train_loader , rel_train_loader = getLoader(
+    abs_train_loader, abs_eval_loader , rel_train_loader,test_loader, val_loader = loader_init(
         args,
         abs_train_dataset ,
         rel_train_dataset,
-        test_dataset
+        test_dataset,
+        val_dataset
     )
 
 #===================================================================================================#
@@ -326,9 +321,8 @@ def main():
 
         time_str = now.strftime("%m%d-%H:%M")
         # runs/{dataset_name}/{date_time}
-        writer = SummaryWriter(os.path.join(args.log_dir , dataset_name, time_str))
-        day_str , _ = time_str.split('-')
-
+        day_str, _ = time_str.split('-')
+        writer = SummaryWriter(os.path.join(args.log_dir , dataset_name, "EXP" + day_str, "EXP" + time_str))
         result_root = os.path.join(args.save_path,dataset_name, "EXP" + day_str, "EXP" + time_str)
         if not os.path.exists(result_root):
             os.makedirs(result_root)
@@ -371,7 +365,7 @@ def main():
             lr_scheduler.step()
 #            print(lr_scheduler.get_last_lr())
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
-            res = Evaluation(test_dataset,abs_train_dataset, model, args , k = args.k)
+            res = Evaluation(val_loader , abs_eval_loader, model, args)
 
             print(dict2str(res , '='))
             if args.record:
@@ -380,7 +374,7 @@ def main():
             if metric < best_metric:
                 best_metric = metric
                 if args.record:
-                    #torch.save(model.state_dict(), model_save_path)
+                    torch.save(model.state_dict(), model_save_path)
                     with open(os.path.join(result_root , 'best_result.txt'), 'w') as f:
                         f.write(f'Epoch : {epoch}\n')
                         for k, v in res.items():
@@ -391,17 +385,16 @@ def main():
             #     break
 
     ### show the best metric
-    if args.record:
-        with open(os.path.join(result_root, 'best_result.txt')) as f:
-            eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
-            #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
-            logger.info(eval_results)
-        record(vars(args), eval_results)
+    # if args.record:
+    #     with open(os.path.join(result_root, 'best_result.txt')) as f:
+    #         eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
+    #         #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
+    #         logger.info(eval_results)
 
-    # checkpoint = torch.load(model_save_path)
-    # model.load_state_dict(checkpoint)
-    # eval_results = Evaluation(test_dataset, abs_train_dataset, model, args , k = args.k)
-
+    checkpoint = torch.load(model_save_path)
+    model.load_state_dict(checkpoint)
+    eval_results = Evaluation(test_loader, abs_eval_loader, model, args)
+    record(vars(args), eval_results)
 
 
 
