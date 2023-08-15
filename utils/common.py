@@ -65,7 +65,9 @@ def get_transforms(model: str = "ResNet50"):
     aug_transform = transforms.Compose([
         transforms.RandomResizedCrop(224), # 随机裁剪缩放
         transforms.RandomHorizontalFlip(),  # 随机水平翻转
-        transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
+        transforms.GaussianBlur(kernel_size=5),
+        #transforms.RandomRotation(15),
+        #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
         transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
     ])
 
@@ -185,10 +187,10 @@ def Evaluation(test_loader, train_loader, model ,args):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, args)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
 
-    knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, args.k)
-    pred = np.round(np.mean(knn_indices, axis=1))
+    # knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, args.k)
+    # pred = np.round(np.mean(knn_indices, axis=1))
 
-    #pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
+    pred = predict(reference_embeddings, reference_labels, test_embeddings, args.k)
     test_labels = test_labels.numpy()
     acc = np.mean(pred == test_labels)
     return {

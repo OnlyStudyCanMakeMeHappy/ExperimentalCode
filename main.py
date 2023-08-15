@@ -75,7 +75,7 @@ parser.add_argument('--Lambda', default = 1.0 ,type = float)
 # 绝对信息的margin
 parser.add_argument('--delta', default= 0.1,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
-parser.add_argument('--varepsilon', '-ve', default=0.1, type = float)
+parser.add_argument('--varepsilon', '-ve', default = 0.1, type = float)
 
 
 args = parser.parse_args()
@@ -153,53 +153,6 @@ def main_and_aux_task_train(
 
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
-
-def same_iterations_train(
-        model,
-        loss_funcR,
-        loss_funcA,
-        rel_train_loader,
-        abs_train_loader ,
-        aug_transform,
-        optimizer,
-):
-    lossA = AverageMeter()
-    lossR = AverageMeter()
-
-    for (data,labelR) ,(image , labelA) in zip(rel_train_loader, abs_train_loader):
-
-            data = data.to(args.gpu , non_blocking = True)
-            # 在线构建偏序对
-            pairs_indices , pairs_labels =  construct_partial_pairs(labelR , args.gpu)
-            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-            embedding = model(data , 1)
-            x_embedding, y_embedding = embedding[idx] , embedding[idy]
-            loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
-            aug_data = aug_transform(data)
-            aug_embedding = model(aug_data , 1)[idx]
-            loss2 = torch.mean(
-                torch.nn.functional.relu(
-                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                    args.varepsilon
-                )
-            )
-
-            lossR.update(loss1.item() + args.mu * loss2.item() , labelR.size(0))
-
-            image = image.to(args.gpu, non_blocking = True)
-            labelA = labelA.to(args.gpu, non_blocking = True)
-            embedding = model(image)
-            loss3 = loss_funcA(embedding, labelA)
-            lossA.update(loss3.item() , labelA.size(0))
-            optimizer.zero_grad()
-            # 联合损失函数
-            loss = (loss1 + args.mu * loss2) * args.Lambda + loss3
-            loss.backward()
-            optimizer.step()
-
-    lossA , lossR = lossA.avg , lossR.avg
-    return lossA, lossR
 def train(
     model,
     loss_funcR,
@@ -217,20 +170,27 @@ def train(
         idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
         #pairs_labels = pairs_labels.to(args.gpu)
         embedding = model(data , 1)
+        #embedding = model(data)
         x_embedding, y_embedding = embedding[idx] , embedding[idy]
-        loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
-        aug_data = aug_transform(data)
-        aug_embedding = model(aug_data , 1)[idx]
-        loss = args.Lambda * loss1
+        #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
         if args.aug:
-            loss2 = torch.mean(
+            # 为没对样本对的头样本进行数据增强
+            aug_data = aug_transform(data)
+            #aug_embedding = model(aug_data, 1)[idx]
+            aug_embedding_all = model(aug_data, 1)
+            loss_pos = torch.mean(
+                torch.nn.functional.relu(torch.nn.functional.pairwise_distance(embedding, aug_embedding_all) - 0.5))
+            aug_embedding = aug_embedding_all[idx]
+
+            loss_aug = torch.mean(
                 torch.nn.functional.relu(
                     torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
                     torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
                     args.varepsilon
                 )
             )
-            loss += loss2 * args.Lambda
+            #loss += loss_aug * args.mu * args.Lambda
+            loss = (loss_pos + loss_aug)  * args.Lambda
 
         lossR.update(loss.item() / args.Lambda , label.size(0))
 
@@ -342,7 +302,6 @@ def main():
         freeze_BN(model)
         if args.fuse:
             #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
-            #lossA, lossR = same_iterations_train(model, loss_funcR, loss_funcA, rel_train_loader, abs_train_loader,aug_transform, optimizer)
             lossA , lossR = train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
             if args.record:

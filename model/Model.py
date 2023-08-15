@@ -25,6 +25,7 @@ class MultiTaskModel(nn.Module):
 
     def forward(self , x , task_id : int = 0):
         feature = self.backbone(x)
+        #output = self.f_head(feature)
         if task_id == 0:
             output = self.f_head(feature)
         elif task_id == 1:
