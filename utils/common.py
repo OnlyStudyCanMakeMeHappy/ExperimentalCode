@@ -63,12 +63,12 @@ def get_transforms(model: str = "ResNet50"):
     )
 
     aug_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224), # 随机裁剪缩放
+        #transforms.RandomResizedCrop(224), # 随机裁剪缩放
         transforms.RandomHorizontalFlip(),  # 随机水平翻转
         transforms.GaussianBlur(kernel_size=5),
         #transforms.RandomRotation(15),
         #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
-        transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+        #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
     ])
 
     test_transform = transforms.Compose([
@@ -136,8 +136,8 @@ def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k, metric 
 
 def predict(reference_embeddings, reference_labels,test_embeddings, k):
     neigh = KNeighborsClassifier(n_neighbors=k)
-    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
-    pred = neigh.predict(test_embeddings.numpy())
+    neigh.fit(reference_embeddings.cpu().numpy(), reference_labels.cpu().numpy())
+    pred = neigh.predict(test_embeddings.cpu().numpy())
     return pred
 
 def compute_c_index(labels : numpy.ndarray, predict):
@@ -184,6 +184,7 @@ def get_logger(logger_name = None):
 @timer
 #def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
 def Evaluation(test_loader, train_loader, model ,args):
+#def Evaluation(test_loader, proxies, model ,args):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, args)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
 
@@ -191,8 +192,10 @@ def Evaluation(test_loader, train_loader, model ,args):
     # pred = np.round(np.mean(knn_indices, axis=1))
 
     pred = predict(reference_embeddings, reference_labels, test_embeddings, args.k)
-    test_labels = test_labels.numpy()
+    #test_labels = test_labels.numpy()
+    test_labels = test_labels.cpu().numpy()
     acc = np.mean(pred == test_labels)
+
     return {
     "ACC" : acc,
     "MAE" : mean_absolute_error(pred , test_labels),
@@ -200,16 +203,36 @@ def Evaluation(test_loader, train_loader, model ,args):
     "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
+def Evaluation_P(test_loader, proxies, model ,args):
+    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
+    with torch.no_grad():
+        P = torch.nn.functional.normalize(proxies , dim = 1).to(args.gpu)
+        _, nn_idx = torch.topk(-torch.cdist(test_embeddings , P), k=1)
+        pred = nn_idx.squeeze().cpu().numpy()
+
+    test_labels = test_labels.cpu().numpy()
+    acc = np.mean(pred == test_labels)
+    return {
+        "ACC": acc,
+        "MAE": mean_absolute_error(pred, test_labels),
+        "MSE": mean_squared_error(pred, test_labels),
+        "QWK": cohen_kappa_score(test_labels, pred, weights='quadratic'),
+        "C_index": compute_c_index(test_labels, pred)
+    }
+
 def get_embeddings_labels(data_loader, model, args):
     model.eval()
-    embeddings = torch.Tensor()
-    labels = torch.LongTensor()
+    device = 'cpu' if args.gpu is None else args.gpu
+    embeddings = torch.Tensor().to(device)
+    labels = torch.LongTensor().to(device)
     with torch.no_grad():
         for (input, target) in data_loader:
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
+                target = target.cuda(args.gpu, non_blocking=True)
             output = model(input)
-            embeddings = torch.cat((embeddings, output.cpu()), 0)
+            #embeddings = torch.cat((embeddings, output.cpu()), 0)
+            embeddings = torch.cat((embeddings, output), 0)
             labels = torch.cat((labels, target))
     return embeddings, labels
 

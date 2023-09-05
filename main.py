@@ -1,9 +1,9 @@
 import argparse
 import os
 import time, math
-
 import numpy as np
-import torch.nn.functional
+import torch
+import torch.nn.functional as F
 import losses
 from model.Model import MultiTaskModel
 from utils.common import *
@@ -97,6 +97,7 @@ def dml_train(
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
     return lossA.avg
 
 def main_and_aux_task_train(
@@ -154,6 +155,7 @@ def main_and_aux_task_train(
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
 def train(
+    epoch,
     model,
     loss_funcR,
     loss_funcA,
@@ -164,40 +166,6 @@ def train(
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-    for (data, label) in rel_train_loader:
-        data = data.to(args.gpu , non_blocking = True)
-        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
-        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-        #pairs_labels = pairs_labels.to(args.gpu)
-        embedding = model(data , 1)
-        #embedding = model(data)
-        x_embedding, y_embedding = embedding[idx] , embedding[idy]
-        #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-        if args.aug:
-            # 为没对样本对的头样本进行数据增强
-            aug_data = aug_transform(data)
-            #aug_embedding = model(aug_data, 1)[idx]
-            aug_embedding_all = model(aug_data, 1)
-            loss_pos = torch.mean(
-                torch.nn.functional.relu(torch.nn.functional.pairwise_distance(embedding, aug_embedding_all) - 0.5))
-            aug_embedding = aug_embedding_all[idx]
-
-            loss_aug = torch.mean(
-                torch.nn.functional.relu(
-                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                    args.varepsilon
-                )
-            )
-            #loss += loss_aug * args.mu * args.Lambda
-            loss = (loss_pos + loss_aug)  * args.Lambda
-
-        lossR.update(loss.item() / args.Lambda , label.size(0))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
     for (image , label) in abs_train_loader:
         image = image.to(args.gpu, non_blocking = True)
         label = label.to(args.gpu, non_blocking = True)
@@ -207,12 +175,86 @@ def train(
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    if epoch > 10:
+        for (data, label) in rel_train_loader:
+            data = data.to(args.gpu , non_blocking = True)
+            pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+
+            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+            #pairs_labels = pairs_labels.to(args.gpu)
+            #embedding = model(data , 1)
+            """
+            h = model.backbone(data)
+            cov_diag = model.g_head(h) ** 2
+            # mvn = torch.distributions.MultivariateNormal(torch.zeros_like(h) , torch.diag_embed(cov_diag))
+            # u = F.normalize(mvn.sample() , dim = 1)
+            u = F.normalize(torch.randn_like(h) , dim = 1)
+            embedding = model.f_head(h)
+            r = 1.0
+            aug_embedding = model.f_head(h + u * r)
+            loss = torch.mean(F.relu(0.1 - F.pairwise_distance(embedding[idx] , aug_embedding[idx]) +
+                          F.pairwise_distance(embedding[idy] , aug_embedding[idx])))
+            """
+
+
+
+            #代理
+            embedding = model(data)
+            P = F.normalize(loss_funcA.proxies, p=2, dim=-1).to(args.gpu)
+
+            #print(P)
+            dist = torch.cdist(embedding , P)
+            _ , nn_idx = torch.topk(-dist ,k = 1)
+            #
+            nn_proxies = P[nn_idx.squeeze()]
+            pair_direction = embedding[idy] - embedding[idx]
+            ref_direction = nn_proxies[idy] - nn_proxies[idx]
+
+            # ref_direction 为 0的情况
+            # print("pair : " , pair_direction)
+            # print("proxies" , ref_direction)
+            sim = torch.cosine_similarity(pair_direction , ref_direction)
+            print(sim)
+            loss = torch.mean(F.relu(0.1 -sim))
+
+
+            #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+            '''
+            if args.aug:
+                # 为没对样本对的头样本进行数据增强
+                aug_data = aug_transform(data)
+                #aug_embedding = model(aug_data, 1)[idx]
+                aug_embedding = model(aug_data)
+                aug_x, aug_y = aug_embedding[idx] , aug_embedding[idy]
+                direction_mat_aug = F.normalize(aug_y - aug_x, dim = 0)
+                sim_aug = torch.einsum('ij,ij -> i' , direction_mat_aug, direction_mat)
+                loss_aug = torch.mean(
+                    torch.relu(torch.abs(sim_aug - 0.1))
+                )
+    
+                # loss_aug = torch.mean(
+                #     torch.nn.functional.relu(
+                #         torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
+                #         torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
+                #         args.varepsilon
+                #     )
+                # )
+                loss += loss_aug * args.mu * args.Lambda
+            '''
+
+
+            lossR.update(loss.item() / args.Lambda , label.size(0))
+
+            optimizer.zero_grad()
+            loss.backward()
+
+            optimizer.step()
 
     return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
 
-    model = MultiTaskModel(f_dim = args.dim , g_dim = args.dim , g_hidden_size=512, Backbone = args.backbone).to(args.gpu)
+    model = MultiTaskModel(f_dim = args.dim , g_dim = 2048 , g_hidden_size = 512, Backbone = args.backbone).to(args.gpu)
 
     base_transform, aug_transform, test_transform = get_transforms()
 
@@ -237,7 +279,10 @@ def main():
         test_dataset,
         val_dataset
     )
-
+#=======================================loss function==============================================#
+    loss_funcR , loss_funcA = losses.Tripletloss(args)
+    #loss_funcA = losses.ProxyNCALoss(len(dataset.classes) , args.dim, args.gpu)
+    loss_funcA = losses.ProxyRankingLoss(len(dataset.classes), args.dim).to(args.gpu)
 #===================================================================================================#
 #                                                                                                   #
 #                       Optimizer and learning rate scheduler Configuration                         #
@@ -246,7 +291,8 @@ def main():
     params_group = [
         {'params': model.backbone.parameters(), 'lr': args.lr},
         {'params': model.f_head.parameters(), 'lr': args.lr * 10},
-        {'params': model.g_head.parameters(), 'lr': args.lr * 10}
+        {'params': model.g_head.parameters(), 'lr': args.lr * 10},
+        {'params': loss_funcA.parameters(), 'lr': args.lr * 10},
     ]
 
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
@@ -266,8 +312,6 @@ def main():
             warm_up_with_cosine_lr = lambda epoch: epoch / args.warm_up_epochs if epoch <= args.warm_up_epochs \
                 else et_min + 0.5 * (args.lr - et_min) * (math.cos((epoch - args.warm_up_epochs) / (args.epochs - args.warm_up_epochs) * math.pi) + 1)
             lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warm_up_with_cosine_lr)
-
-    loss_funcR , loss_funcA = losses.Tripletloss(args)
 
     hparams = runtime_env(args)
 
@@ -302,7 +346,7 @@ def main():
         freeze_BN(model)
         if args.fuse:
             #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
-            lossA , lossR = train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
             if args.record:
                 writer.add_scalars("loss", {
@@ -324,7 +368,8 @@ def main():
             lr_scheduler.step()
 #            print(lr_scheduler.get_last_lr())
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
-            res = Evaluation(val_loader , abs_eval_loader, model, args)
+            #res = Evaluation(val_loader , abs_eval_loader, model, args)
+            res = Evaluation_P(val_loader, loss_funcA.proxies, model, args)
 
             print(dict2str(res , '='))
             if args.record:
@@ -349,6 +394,10 @@ def main():
     #         eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
     #         #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
     #         logger.info(eval_results)
+    #     if epoch % 10 == 1:
+    #         P = F.normalize(loss_funcA.proxies , p = 2 , dim = 1)
+    #         #print(torch.matmul(P, P.T))
+    #         print(torch.cdist(P , P))
 
     checkpoint = torch.load(model_save_path)
     model.load_state_dict(checkpoint)

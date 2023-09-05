@@ -248,7 +248,7 @@ def loader_init(args , abs_train_dataset , rel_train_dataset, test_dataset, val_
     # P = len(dataset.classes) if args.P is None else args.P
     P = args.P
     batch_size = P * args.K
-    iter_per_epoch = (len(rel_train_dataset) + batch_size - 1) // batch_size if args.iter_per_epoch is None else args.iter_per_eopch
+    iter_per_epoch = (len(rel_train_dataset) + batch_size - 1) // batch_size if args.iter_per_epoch is None else args.iter_per_epoch
     samplerR = MPerClassSampler(
         rel_train_dataset.labels,
         batch_size=batch_size,

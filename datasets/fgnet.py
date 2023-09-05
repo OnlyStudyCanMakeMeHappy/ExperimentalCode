@@ -24,7 +24,7 @@ class FGNET(Dataset):
                     self.groupIds.append(i)
                     break
         self.labels = self.groupIds
-        self.classes = list(set(self.groupIds))
+        self.classes = list(set(self.labels))
 
     def __len__(self):
         return len(self.images)
