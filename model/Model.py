@@ -16,7 +16,6 @@ class MultiTaskModel(nn.Module):
             self.backbone = BackboneOptions[Backbone]
         except KeyError:
             print(f"The Backbone must be one of {list(BackboneOptions.keys())}")
-
         #TODO : Other baseline
         output_size = self.backbone.output_size
         self.f_head = Embedding(output_size , f_dim)

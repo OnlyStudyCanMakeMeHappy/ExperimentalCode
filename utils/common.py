@@ -184,7 +184,6 @@ def get_logger(logger_name = None):
 @timer
 #def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
 def Evaluation(test_loader, train_loader, model ,args):
-#def Evaluation(test_loader, proxies, model ,args):
     reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, args)
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
 
@@ -203,6 +202,7 @@ def Evaluation(test_loader, train_loader, model ,args):
     "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
+@timer
 def Evaluation_P(test_loader, proxies, model ,args):
     test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
     with torch.no_grad():
@@ -235,6 +235,8 @@ def get_embeddings_labels(data_loader, model, args):
             embeddings = torch.cat((embeddings, output), 0)
             labels = torch.cat((labels, target))
     return embeddings, labels
+
+
 
 
 

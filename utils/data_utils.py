@@ -1,9 +1,12 @@
-from torch.utils.data import  Dataset, random_split, Subset, BatchSampler, DataLoader
 import numpy as np
 import torch
-from collections import defaultdict
 import random
+import  torchvision.transforms as transforms
+
+from collections import defaultdict
+from torch.utils.data import  Dataset, random_split, Subset, BatchSampler, DataLoader
 from MPerClassSampler import MPerClassSampler
+
 from typing import *
 
 # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
@@ -300,6 +303,23 @@ def details_info_print(datasets , classes):
         if not s:
             print('-' * (sum(col_widths) + 3 * len(header) - 3)) # print separator
             s = True
+
+class AugmentTransform:
+    def __init__(self):
+
+        self.weak = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(size=32,
+                                  padding=int(32 * 0.125),
+                                  padding_mode='reflect')])
+
+
+
+
+    def __call__(self, x):
+        weak = self.weak(x)
+        strong = self.strong(x)
+        return self.normalize(weak), self.normalize(strong)
 
 
 
