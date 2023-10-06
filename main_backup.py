@@ -155,6 +155,7 @@ def main_and_aux_task_train(
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
 def train(
+    epoch,
     model,
     loss_funcR,
     loss_funcA,
@@ -174,68 +175,41 @@ def train(
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-    for (data, label) in rel_train_loader:
+    # if epoch <= 31:
+    #     return lossA.avg, lossR.avg
+    a , b = 0 , 0
+    for index, (data, label) in enumerate(rel_train_loader):
+        label = label.to(args.gpu)
         data = data.to(args.gpu , non_blocking = True)
         pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
-
         idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-        #pairs_labels = pairs_labels.to(args.gpu)
-        #embedding = model(data , 1)
 
         #代理
         embedding = model(data)
+
         P = F.normalize(loss_funcA.proxies, p=2, dim=-1).to(args.gpu)
 
-        #print(P)
         dist = torch.cdist(embedding , P)
-        _ , nn_idx = torch.topk(-dist ,k = 1)
-        #
-        nn_proxies = P[nn_idx.squeeze()]
-        pair_direction = embedding[idy] - embedding[idx]
-        ref_direction = nn_proxies[idy] - nn_proxies[idx]
+        prob = torch.softmax(-dist, dim=1)
+        ref = torch.argmax(prob , dim = 1)
+        # 偏序关系预测正确但是存在标签预测错误的偏序对
+        mask_ne = ref[idx] != ref[idy]
+        idx , idy = idx[mask_ne] , idy[mask_ne]
+        mask_corr = ref[idx] > ref[idy]
+        mask = torch.ne(ref[idx[mask_corr]], label[idx[mask_corr]]) | torch.ne(ref[idy[mask_corr]], label[idy[mask_corr]])
+        a += torch.sum(mask).item()
+        # 偏序关系预测错误
+        b += idx.size(0) - torch.sum(mask_corr).item()
 
-        # ref_direction 为 0的情况
-        # print("pair : " , pair_direction)
-        # print("proxies" , ref_direction)
-        sim = torch.cosine_similarity(pair_direction , ref_direction)
-        print(torch.sum(sim > 0.3))
-        # loss = torch.mean(F.relu(0.1 -sim))
-        #
-        #
-        # #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-        # '''
-        # if args.aug:
-        #     # 为没对样本对的头样本进行数据增强
-        #     aug_data = aug_transform(data)
-        #     #aug_embedding = model(aug_data, 1)[idx]
-        #     aug_embedding = model(aug_data)
-        #     aug_x, aug_y = aug_embedding[idx] , aug_embedding[idy]
-        #     direction_mat_aug = F.normalize(aug_y - aug_x, dim = 0)
-        #     sim_aug = torch.einsum('ij,ij -> i' , direction_mat_aug, direction_mat)
-        #     loss_aug = torch.mean(
-        #         torch.relu(torch.abs(sim_aug - 0.1))
-        #     )
-        #
-        #     # loss_aug = torch.mean(
-        #     #     torch.nn.functional.relu(
-        #     #         torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-        #     #         torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-        #     #         args.varepsilon
-        #     #     )
-        #     # )
-        #     loss += loss_aug * args.mu * args.Lambda
-        # '''
-        #
-        #
-        # lossR.update(loss.item() / args.Lambda , label.size(0))
-        #
+
+        #lossR.update(loss.item() / args.Lambda , label.size(0))
+
         # optimizer.zero_grad()
         # loss.backward()
         #
         # optimizer.step()
 
-
+    print(a , b)
     return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
@@ -332,7 +306,7 @@ def main():
         freeze_BN(model)
         if args.fuse:
             #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
-            lossA , lossR = train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
             if args.record:
                 writer.add_scalars("loss", {

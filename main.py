@@ -183,23 +183,30 @@ def train(
 
         idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
         pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
-        embedding = model(data)
+        h_feat = model.backbone(data)
+        aug_h = h_feat[idx] + (h_feat[idy] - h_feat[idx]) * 0.5
+        emb_x = model.f_head(h_feat[idx])
+        emb_y = model.f_head(h_feat[idy])
+        emb_aug = model.f_head(aug_h)
+        loss = torch.mean(F.relu(0.1- F.pairwise_distance(emb_x , emb_y) + F.pairwise_distance(emb_x, emb_aug)))
+        #embedding = model(data)
         #embedding = model(data , 1)
 
-        x_embedding = embedding[idx]
-        y_embedding = embedding[idy]
-        loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-
-        if args.aug:
-            a = 0.8
-            alpha = torch.distributions.Beta(a , a).sample(sample_shape=idx.size()).view(-1 , 1, 1, 1).to(args.gpu)
-            mix = alpha * data[idx] + (1 - alpha) * data[idy]
-            mix_emb = model(mix)
-            dist_diff = F.pairwise_distance(x_embedding , mix_emb) - F.pairwise_distance(y_embedding , mix_emb)
-            mask = torch.where(alpha >= 0.5 , 1, -1)
-            loss_aug = torch.mean(F.relu(dist_diff * mask - 0.05))
-
-            loss += loss_aug * args.mu * args.Lambda
+        # x_embedding = embedding[idx]
+        # y_embedding = embedding[idy]
+        #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+        #loss = torch.mean(F.relu(1 - F.pairwise_distance(x_embedding , y_embedding)))
+        # if args.aug:
+        #     a = 0.8
+        #     alpha = torch.distributions.Beta(a , a).sample(sample_shape=idx.size()).view(-1 , 1, 1, 1).to(args.gpu)
+        #     mix = alpha * data[idx] + (1 - alpha) * data[idy]
+        #     mix_emb = model(mix)
+        #     #dist_diff = F.pairwise_distance(x_embedding , mix_emb) - F.pairwise_distance(y_embedding , mix_emb)
+        #     dist_diff = F.pairwise_distance(x_embedding, y_embedding) - F.pairwise_distance(x_embedding, mix_emb)
+        #     #mask = torch.where(alpha < 0.5 , 1, -1)
+        #     loss_aug = torch.mean(F.relu(-dist_diff))
+        #
+        #     loss = loss_aug * args.mu * args.Lambda
 
 
         lossR.update(loss.item() / args.Lambda , label.size(0))

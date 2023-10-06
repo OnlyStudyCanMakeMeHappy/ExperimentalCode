@@ -109,36 +109,16 @@ class ProxyRankingLoss(torch.nn.Module):
         P = F.normalize(self.proxies, p=2, dim=-1)
         D = torch.cdist(x, P)
         sim = -torch.log(1 + D ** 2)
+        # 高斯核函数
         prob = F.softmax(sim, dim=1)
         mask_e = y.unsqueeze(1) == self.classes
         exp = torch.sum(prob * mask_e, dim=1)  # broadcast
         loss1 = torch.mean(-torch.log(exp) / (1 - exp))
         #loss1 = torch.mean(-torch.log(exp))
 
-        n = len(self.classes)
-        # loss2 = 0.0
-        # for i, label in enumerate(y):
-        #     if label >= 2:
-        #         indices = torch.combinations(self.classes[:label])
-        #         p , s = indices[:,0] , indices[:,1]
-        #         loss2 += torch.mean(F.relu(self.margin - D[i][p] + D[i][s]))
-        #     if  n - label - 1 >= 2:
-        #         indices = torch.combinations(self.classes[label + 1:])
-        #         p , s = indices[:,0] , indices[:,1]
-        #         loss2 += torch.mean(F.relu(self.margin - D[i][s] + D[i][p]))
-
-        # 代理排序
-        # D = torch.cdist(P , P)
-        # diff = D[:, : -1] - D[:, 1:]
-        # mask = torch.where(self.classes.unsqueeze(1) > self.classes, 1, -1)
-        # loss2 = torch.mean(F.relu(self.margin - mask[:, : -1] * diff))
-
-        #D = torch.matmul(P , P.T)
-        # y_i , (0 , y_i - 1) & (y_i + 1 , n - 1)
-        # 只考虑邻接类别
         diff = D[:, : -1] - D[:, 1 : ]
-        #mask = torch.where(y.unsqueeze(1) > self.classes, 1, -1)
-        mask = torch.where(y.unsqueeze(1) >= self.classes, 1, -1)
+        #diff = prob[:, : -1] - prob[:, 1 : ]
+        mask = torch.where(y.unsqueeze(1) <= self.classes, 1, -1)
         #loss2 = torch.mean(F.relu(self.margin - mask[:, : -1] * diff))
         loss2 = torch.mean(F.relu(0 - mask[:, : -1] * diff))
         #loss2 = torch.mean(F.softplus(self.margin - mask[:, : -1] * diff))
