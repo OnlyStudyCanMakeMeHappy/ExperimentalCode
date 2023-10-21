@@ -38,6 +38,35 @@ def timer(func):
 
 
 # TODO: 根据模型做不同的transform, 特别是BnInception需要特别对待
+class AugTransform(object):
+    def __init__(self, normalize):
+        self.normalize =  transforms.Compose([
+            transforms.ToTensor(),
+            normalize
+        ])
+        self.base_transform = transforms.Compose([
+            transforms.Resize((256,256)),
+            transforms.RandomResizedCrop((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            # transforms.ToTensor(),
+            # normalize
+        ])
+        self.aug_transform = transforms.Compose([
+            # transforms.Resize((256, 256)),
+            # transforms.RandomResizedCrop(224), # 随机裁剪缩放
+            transforms.RandomHorizontalFlip(),  # 随机水平翻转
+            transforms.GaussianBlur(kernel_size=5),
+            transforms.RandomRotation(15),
+            #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
+            #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+            #transforms.ToTensor()
+        ])
+
+    def __call__(self, x):
+        x = self.base_transform(x)
+        aug_x = self.aug_transform(x)
+        return self.normalize(x) , self.normalize(aug_x)
+
 def get_transforms(model: str = "ResNet50"):
     # opencv读取图片是BGR通道, ResNet : 转换通道, ToTensor()
     normalize = transforms.Normalize(
@@ -62,14 +91,7 @@ def get_transforms(model: str = "ResNet50"):
         0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s
     )
 
-    aug_transform = transforms.Compose([
-        #transforms.RandomResizedCrop(224), # 随机裁剪缩放
-        transforms.RandomHorizontalFlip(),  # 随机水平翻转
-        transforms.GaussianBlur(kernel_size=5),
-        #transforms.RandomRotation(15),
-        #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
-        #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
-    ])
+    aug_transform = AugTransform(normalize)
 
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),

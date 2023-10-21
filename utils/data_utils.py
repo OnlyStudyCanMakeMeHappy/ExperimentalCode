@@ -6,7 +6,7 @@ import  torchvision.transforms as transforms
 from collections import defaultdict
 from torch.utils.data import  Dataset, random_split, Subset, BatchSampler, DataLoader
 from MPerClassSampler import MPerClassSampler
-
+from math import ceil
 from typing import *
 
 # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
@@ -41,6 +41,7 @@ class CustomSubset(Subset):
         if self.transform is not None:
             data = self.transform(data)
         return data , label
+
 
 class MultiTaskDataset(Dataset):
     def __init__(self, datasets):
@@ -124,7 +125,7 @@ class POP(Dataset):
         return res
 
 
-def spilt_dataset(dataset, r: float, tx=None, ty=None):
+def spilt_dataset(dataset, r: float, tx = None, ty = None):
     sze = len(dataset)
     shuffled_indices = np.random.permutation(sze)
     datasets_after_spilt = []
@@ -135,26 +136,44 @@ def spilt_dataset(dataset, r: float, tx=None, ty=None):
     return datasets_after_spilt
 
 
-def process_dataset(dataset: Dataset, train_ratio, abs_ratio, tx = None , ty = None):
-    #划分训练集和测试集, 并施以不同的transform
-    train_data, eval_data = spilt_dataset(
-        dataset,
-        train_ratio,
-        tx,
-        ty,
-    )
-    #train_data, test_data = spilt_dataset(dataset , train_ratio, tx , ty)
-    # 进一步将训练集划分为绝对信息和相对信息训练集
-    abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio)
-    test_data, valid_data = spilt_dataset(eval_data, 0.5)
-    #return abs_train_dataset,rel_train_dataset, test_data, valid_data
+# def process_dataset(dataset: Dataset, train_ratio, abs_ratio, train_transform = None , test_transform = None, aug_transform = None):
+#     #划分训练集和测试集, 并施以不同的transform
+#     train_data, eval_data = spilt_dataset(dataset, train_ratio, train_transform, test_transform)
+#     #train_data, test_data = spilt_dataset(dataset , train_ratio, tx , ty)
+#     # 进一步将训练集划分为绝对信息和相对信息训练集
+#     abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio, )
+#     test_data, valid_data = spilt_dataset(eval_data, 0.5)
+#     #return abs_train_dataset,rel_train_dataset, test_data, valid_data
+#     return {
+#         'ab_train' : abs_train_dataset,
+#         're_train' : rel_train_dataset,
+#         'test' : test_data,
+#         'valid' : valid_data
+#     }
+
+def process_dataset(dataset: Dataset, train_ratio, abs_ratio, train_transform = None , test_transform = None, aug_transform = None):
+    sze = len(dataset)
+    shuffled_indices = np.random.permutation(sze)
+    # train dataset
+    train_sze = ceil(sze * train_ratio)
+    ab_indices = range(ceil(train_sze * abs_ratio))
+    re_indices = range(ceil(train_sze * abs_ratio) , train_sze)
+
+    test_sze = (sze - train_sze) // 2
+    test_indices = range(train_sze ,  train_sze + test_sze)
+    val_indices = range(train_sze + test_sze , sze)
+
+    abs_train_dataset = CustomSubset(dataset, shuffled_indices[ab_indices], train_transform)
+    rel_train_dataset = CustomSubset(dataset, shuffled_indices[re_indices], aug_transform if aug_transform else train_transform)
+    test_data = CustomSubset(dataset, shuffled_indices[test_indices], test_transform)
+    valid_data = CustomSubset(dataset, shuffled_indices[val_indices], test_transform)
+
     return {
         'ab_train' : abs_train_dataset,
         're_train' : rel_train_dataset,
         'test' : test_data,
         'valid' : valid_data
     }
-
 
 def match_partial_pairs(batch):
     # 按照标签分类
@@ -303,23 +322,6 @@ def details_info_print(datasets , classes):
         if not s:
             print('-' * (sum(col_widths) + 3 * len(header) - 3)) # print separator
             s = True
-
-class AugmentTransform:
-    def __init__(self):
-
-        self.weak = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32 * 0.125),
-                                  padding_mode='reflect')])
-
-
-
-
-    def __call__(self, x):
-        weak = self.weak(x)
-        strong = self.strong(x)
-        return self.normalize(weak), self.normalize(strong)
 
 
 

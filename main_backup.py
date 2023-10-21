@@ -71,7 +71,7 @@ parser.add_argument('--fuse' , action = "store_true", help = "whether fuse the r
 parser.add_argument('--aug', action = 'store_true', help = 'Whether to do data augmentation for the head samples')
 parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'margin'])
 parser.add_argument('--mu', default = 0.8,type = float)
-parser.add_argument('--Lambda', default = 1.0 ,type = float)
+parser.add_argument('--Lambda', default = 0.8 ,type = float)
 # 绝对信息的margin
 parser.add_argument('--delta', default= 0.1,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
@@ -124,28 +124,28 @@ def main_and_aux_task_train(
             pairs_indices , pairs_labels =  construct_partial_pairs(label , args.gpu)
             idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
             #pairs_labels = pairs_labels.to(args.gpu)
-            embedding = model(data , task_id)
-            x_embedding, y_embedding = embedding[idx] , embedding[idy]
-            loss1 = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels)
-            aug_data = aug_transform(data)
-            aug_embedding = model(aug_data , task_id)[idx]
-            loss2 = torch.mean(
-                torch.nn.functional.relu(
-                    torch.nn.functional.pairwise_distance(x_embedding, aug_embedding) -
-                    torch.nn.functional.pairwise_distance(y_embedding, aug_embedding) +
-                    args.varepsilon
-                )
-            )
-            loss = (loss1 + args.mu * loss2) * args.Lambda
+            #代理
+            embedding = model(data)
+            P = F.normalize(loss_funcA.proxies, p=2, dim=-1).to(args.gpu)
+
+            dist = torch.cdist(embedding , P)
+            prob = torch.softmax(-dist, dim=1)
+            CDF = torch.cumsum(prob, dim=1)
+            P_X_less_Y = torch.sum(prob[idy, 1:] * CDF[idx, : -1], dim=1)
+            P_Y_less_X = torch.sum(prob[idx, 1:] * CDF[idy, : -1], dim=1)
+            loss = -torch.mean(torch.log(torch.where(pairs_labels == 0, P_X_less_Y, P_Y_less_X))) * args.Lambda
+
             lossR.update(loss.item() / args.Lambda , label.size(0))
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
         else:
             image , label = next(iterA)
             image = image.to(args.gpu, non_blocking = True)
             label = label.to(args.gpu, non_blocking = True)
-            embedding = model(image, task_id)
+            embedding = model(image)
             loss = loss_funcA(embedding, label)
             lossA.update(loss.item() , label.size(0))
             optimizer.zero_grad()
@@ -177,7 +177,6 @@ def train(
         optimizer.step()
     # if epoch <= 31:
     #     return lossA.avg, lossR.avg
-    a , b = 0 , 0
     for index, (data, label) in enumerate(rel_train_loader):
         label = label.to(args.gpu)
         data = data.to(args.gpu , non_blocking = True)
@@ -191,25 +190,18 @@ def train(
 
         dist = torch.cdist(embedding , P)
         prob = torch.softmax(-dist, dim=1)
-        ref = torch.argmax(prob , dim = 1)
-        # 偏序关系预测正确但是存在标签预测错误的偏序对
-        mask_ne = ref[idx] != ref[idy]
-        idx , idy = idx[mask_ne] , idy[mask_ne]
-        mask_corr = ref[idx] > ref[idy]
-        mask = torch.ne(ref[idx[mask_corr]], label[idx[mask_corr]]) | torch.ne(ref[idy[mask_corr]], label[idy[mask_corr]])
-        a += torch.sum(mask).item()
-        # 偏序关系预测错误
-        b += idx.size(0) - torch.sum(mask_corr).item()
+        CDF = torch.cumsum(prob, dim=1)
+        P_X_less_Y = torch.sum(prob[idy, 1:] * CDF[idx, : -1], dim=1)
+        P_Y_less_X = torch.sum(prob[idx, 1:] * CDF[idy, : -1], dim=1)
+        loss = -torch.mean(torch.log(torch.where(pairs_labels == 0, P_X_less_Y, P_Y_less_X))) * args.Lambda
+
+        lossR.update(loss.item() / args.Lambda , label.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 
-        #lossR.update(loss.item() / args.Lambda , label.size(0))
-
-        # optimizer.zero_grad()
-        # loss.backward()
-        #
-        # optimizer.step()
-
-    print(a , b)
     return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
@@ -224,7 +216,7 @@ def main():
     dataset = args.data()
     dataset_name = dataset.__class__.__name__
 
-    spilt_datasets = process_dataset(dataset, 0.8, 0.1, tx=base_transform,ty=test_transform)
+    spilt_datasets = process_dataset(dataset, 0.8, 0.1, tx = base_transform,ty = test_transform)
     details_info_print(spilt_datasets , dataset.classes)
     abs_train_dataset, rel_train_dataset, test_dataset, val_dataset = spilt_datasets.values()
 
@@ -305,8 +297,8 @@ def main():
         model.train()
         freeze_BN(model)
         if args.fuse:
-            #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
-            lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            #lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
             if args.record:
                 writer.add_scalars("loss", {

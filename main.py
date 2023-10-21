@@ -177,45 +177,42 @@ def train(
         loss.backward()
         optimizer.step()
 
-    for (data, label) in rel_train_loader:
-        data = data.to(args.gpu , non_blocking = True)
-        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+    # for (data,aug_data), label in rel_train_loader:
+    #     data = data.to(args.gpu , non_blocking = True)
+    #     aug_data = aug_data.to(args.gpu, non_blocking = True)
+    #     pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+    #     idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+    #     #pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+    #     embedding = model(data)
+    #     aug_embedding = model(aug_data)[idx]
+    #     x_embedding = embedding[idx]
+    #     y_embedding = embedding[idy]
+    #
+    #     # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+    #     #loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
+    #
+    #     lossR.update(loss.item() / args.Lambda , label.size(0))
+    #     optimizer.zero_grad()
+    #     loss.backward()
+    #
+    #     optimizer.step()
+    for data, label in rel_train_loader:
+        data = data.to(args.gpu, non_blocking=True)
+        pairs_indices, pairs_labels = construct_partial_pairs(label, args.gpu)
+        idx, idy = pairs_indices[:, 0], pairs_indices[:, 1]
+        # pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+        embedding = model(data)
+        x_embedding = embedding[idx]
+        y_embedding = embedding[idy]
 
-        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-        pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
-        h_feat = model.backbone(data)
-        aug_h = h_feat[idx] + (h_feat[idy] - h_feat[idx]) * 0.5
-        emb_x = model.f_head(h_feat[idx])
-        emb_y = model.f_head(h_feat[idy])
-        emb_aug = model.f_head(aug_h)
-        loss = torch.mean(F.relu(0.1- F.pairwise_distance(emb_x , emb_y) + F.pairwise_distance(emb_x, emb_aug)))
-        #embedding = model(data)
-        #embedding = model(data , 1)
+        # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+        # loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
 
-        # x_embedding = embedding[idx]
-        # y_embedding = embedding[idy]
-        #loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-        #loss = torch.mean(F.relu(1 - F.pairwise_distance(x_embedding , y_embedding)))
-        # if args.aug:
-        #     a = 0.8
-        #     alpha = torch.distributions.Beta(a , a).sample(sample_shape=idx.size()).view(-1 , 1, 1, 1).to(args.gpu)
-        #     mix = alpha * data[idx] + (1 - alpha) * data[idy]
-        #     mix_emb = model(mix)
-        #     #dist_diff = F.pairwise_distance(x_embedding , mix_emb) - F.pairwise_distance(y_embedding , mix_emb)
-        #     dist_diff = F.pairwise_distance(x_embedding, y_embedding) - F.pairwise_distance(x_embedding, mix_emb)
-        #     #mask = torch.where(alpha < 0.5 , 1, -1)
-        #     loss_aug = torch.mean(F.relu(-dist_diff))
-        #
-        #     loss = loss_aug * args.mu * args.Lambda
-
-
-        lossR.update(loss.item() / args.Lambda , label.size(0))
-
+        lossR.update(loss.item() / args.Lambda, label.size(0))
         optimizer.zero_grad()
         loss.backward()
 
         optimizer.step()
-
     return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
@@ -230,7 +227,7 @@ def main():
     dataset = args.data()
     dataset_name = dataset.__class__.__name__
 
-    spilt_datasets = process_dataset(dataset, 0.8, 0.1, tx=base_transform,ty=test_transform)
+    spilt_datasets = process_dataset(dataset, 0.8, 0.1, base_transform,test_transform, aug_transform = None)
     details_info_print(spilt_datasets , dataset.classes)
     abs_train_dataset, rel_train_dataset, test_dataset, val_dataset = spilt_datasets.values()
 
