@@ -13,7 +13,7 @@ from utils.common import *
 from utils.data_utils import *
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience, UTKFace
-
+from itertools import cycle
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
 
@@ -148,6 +148,37 @@ def main_and_aux_task_train(
     return lossA, lossR
 
 
+# def train(
+#         model,
+#         loss_funcA,
+#         rel_train_loader,
+#         abs_train_loader,
+#         optimizer,
+# ):
+#     lossA = AverageMeter()
+#     lossR = AverageMeter()
+#     for (image, label) in abs_train_loader:
+#         image = image.to(args.gpu, non_blocking=True)
+#         label = label.to(args.gpu, non_blocking=True)
+#         embedding = model(image)
+#         loss = loss_funcA(embedding, label)
+#         lossA.update(loss.item(), label.size(0))
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+#
+#     for (data,aug_data), _ in rel_train_loader:
+#         data = data.to(args.gpu, non_blocking=True)
+#         aug_data = aug_data.to(args.gpu, non_blocking=True)
+#         embedding = model(data)
+#         aug_embedding = model(aug_data)
+#         loss = torch.mean(F.pairwise_distance(embedding , aug_embedding) ** 2)
+#         # consistency loss ,
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+#         lossR.update(loss.item(), data.size(0))
+#     return lossA.avg, lossR.avg
 def train(
         model,
         loss_funcA,
@@ -157,29 +188,30 @@ def train(
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-    for (image, label) in abs_train_loader:
+    for (image, label),  ((data,aug_data), _)in zip(cycle(abs_train_loader) , rel_train_loader):
         image = image.to(args.gpu, non_blocking=True)
         label = label.to(args.gpu, non_blocking=True)
         embedding = model(image)
-        loss = loss_funcA(embedding, label)
-        lossA.update(loss.item(), label.size(0))
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        loss_abs = loss_funcA(embedding, label)
+        lossA.update(loss_abs.item(), label.size(0))
 
-    for (data,aug_data), _ in rel_train_loader:
         data = data.to(args.gpu, non_blocking=True)
-        aug_data = aug_data.to(args.gpu, non_blocking=True)
         embedding = model(data)
-        aug_embedding = model(aug_data)
-        loss = torch.mean(F.pairwise_distance(embedding , aug_embedding) ** 2)
-        # consistency loss ,
+        with torch.no_grad():
+            aug_data = aug_data.to(args.gpu, non_blocking=True)
+            aug_embedding = model(aug_data)
+            aug_embedding = aug_embedding.detach()
+
+        #loss_rel = torch.mean(F.pairwise_distance(embedding , aug_embedding) ** 2) \
+        loss_rel = torch.mean(F.relu(F.pairwise_distance(embedding, aug_embedding) - 0.1))
+        lossR.update(loss_rel.item(), data.size(0))
+        loss = loss_abs + args.Lambda * loss_rel
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        lossR.update(loss.item(), data.size(0))
-    return lossA.avg, lossR.avg
 
+    return lossA.avg, lossR.avg
 
 def main():
     fix_seed(0)
@@ -195,7 +227,8 @@ def main():
     dataset_name = dataset.__class__.__name__
     # train : test : val = 8 : 1 : 1
     # labeled : unlabeled = 1 : 9
-    spilt_datasets = process_dataset(dataset, 0.8, 0.05, base_transform, test_transform, aug_transform = aug_transform)
+    #spilt_datasets = process_dataset(dataset, 0.8, 0.1, base_transform, test_transform, aug_transform = aug_transform)
+    spilt_datasets = process_dataset(dataset, 0.8, 0.1, base_transform, test_transform, aug_transform = None)
     details_info_print(spilt_datasets, dataset.classes)
     abs_train_dataset, rel_train_dataset, test_dataset, val_dataset = spilt_datasets.values()
 

@@ -39,8 +39,8 @@ def Tripletloss(args):
     # default -> AvgNonZeroReducer
     loss_funcR = TripletMarginLoss(distance=dist_pair, margin = args.vartheta, reducer = MeanReducer())
     loss_funcA = TripletMarginLoss(margin = args.delta, reducer = MeanReducer())
-    #return loss_funcR, loss_funcA
-    return loss_funcR, AbsPartLoss(args.delta)
+    return loss_funcR, loss_funcA
+    #return loss_funcR, AbsPartLoss(args.delta)
 
 class AbsPartLoss(torch.nn.Module):
     def __init__(self, margin):

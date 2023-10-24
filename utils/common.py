@@ -206,8 +206,8 @@ def get_logger(logger_name = None):
 @timer
 #def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
 def Evaluation(test_loader, train_loader, model ,args):
-    reference_embeddings, reference_labels = get_embeddings_labels(train_loader, model, args)
-    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
+    reference_embeddings, reference_labels = extract_features(train_loader, model, args)
+    test_embeddings, test_labels = extract_features(test_loader, model, args)
 
     # knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, args.k)
     # pred = np.round(np.mean(knn_indices, axis=1))
@@ -226,7 +226,7 @@ def Evaluation(test_loader, train_loader, model ,args):
 }
 @timer
 def Evaluation_P(test_loader, proxies, model ,args):
-    test_embeddings, test_labels = get_embeddings_labels(test_loader, model, args)
+    test_embeddings, test_labels = extract_features(test_loader, model, args)
     with torch.no_grad():
         P = torch.nn.functional.normalize(proxies , dim = 1).to(args.gpu)
         _, nn_idx = torch.topk(-torch.cdist(test_embeddings , P), k=1)
@@ -242,7 +242,7 @@ def Evaluation_P(test_loader, proxies, model ,args):
         "C_index": compute_c_index(test_labels, pred)
     }
 
-def get_embeddings_labels(data_loader, model, args):
+def extract_features(data_loader, model, args):
     model.eval()
     device = 'cpu' if args.gpu is None else args.gpu
     embeddings = torch.Tensor().to(device)
