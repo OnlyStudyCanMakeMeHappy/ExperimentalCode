@@ -13,7 +13,8 @@ import logging, colorlog
 import faiss
 from torch.utils.data import DataLoader
 import time
-
+from randaugment import RandAugment
+import copy
 def fix_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -40,32 +41,38 @@ def timer(func):
 # TODO: 根据模型做不同的transform, 特别是BnInception需要特别对待
 class AugTransform(object):
     def __init__(self, normalize):
-        self.normalize =  transforms.Compose([
-            transforms.ToTensor(),
-            normalize
-        ])
-        self.base_transform = transforms.Compose([
+        # self.normalize =  transforms.Compose([
+        #     transforms.ToTensor(),
+        #     normalize
+        # ])
+        self.transform = transforms.Compose([
             transforms.Resize((256,256)),
             transforms.RandomResizedCrop((224, 224)),
             transforms.RandomHorizontalFlip(),
-            # transforms.ToTensor(),
-            # normalize
+            transforms.ToTensor(),
+            normalize
         ])
-        self.aug_transform = transforms.Compose([
-            # transforms.Resize((256, 256)),
-            # transforms.RandomResizedCrop(224), # 随机裁剪缩放
-            transforms.RandomHorizontalFlip(),  # 随机水平翻转
-            transforms.GaussianBlur(kernel_size=5),
-            transforms.RandomRotation(15),
-            #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
-            #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
-            #transforms.ToTensor()
-        ])
+        self.strong_transform = copy.deepcopy(self.transform)
+        self.strong_transform.transforms.insert(0, RandAugment(3, 5))
+
+        s = 1.0
+        # self.aug_transform = transforms.Compose([
+        #     # transforms.Resize((256, 256)),
+        #     # transforms.RandomResizedCrop(224), # 随机裁剪缩放
+        #     transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        #     transforms.GaussianBlur(kernel_size=5),
+        #     # transforms.RandomRotation(15),
+        #     # transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s),
+        #     #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
+        #     #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+        #     #transforms.ToTensor()
+        # ])
 
     def __call__(self, x):
-        x = self.base_transform(x)
-        aug_x = self.aug_transform(x)
-        return self.normalize(x) , self.normalize(aug_x)
+        # x = self.base_transform(x)
+        # aug_x = self.aug_transform(x)
+        # return self.normalize(x) , self.normalize(aug_x)
+        return self.transform(x) , self.strong_transform(x)
 
 def get_transforms(model: str = "ResNet50"):
     # opencv读取图片是BGR通道, ResNet : 转换通道, ToTensor()
@@ -206,6 +213,15 @@ def get_logger(logger_name = None):
 @timer
 #def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
 def Evaluation(test_loader, train_loader, model ,args):
+    model.eval()
+    device = 'cpu' if args.gpu is None else args.gpu
+    pred = torch.LongTensor().to(device)
+    test_labels = torch.LongTensor().to(device)
+    for batch_idx, (data, targets) in enumerate(test_loader):
+        data, targets = data.to(device), targets.to(device)
+        pred = torch.cat([pred, torch.argmax(model(data), dim = 1)] , 0)
+        test_labels = torch.cat((test_labels, targets))
+    """
     reference_embeddings, reference_labels = extract_features(train_loader, model, args)
     test_embeddings, test_labels = extract_features(test_loader, model, args)
 
@@ -214,6 +230,9 @@ def Evaluation(test_loader, train_loader, model ,args):
 
     pred = predict(reference_embeddings, reference_labels, test_embeddings, args.k)
     #test_labels = test_labels.numpy()
+    test_labels = test_labels.cpu().numpy()
+    """
+    pred = pred.cpu().numpy()
     test_labels = test_labels.cpu().numpy()
     acc = np.mean(pred == test_labels)
 

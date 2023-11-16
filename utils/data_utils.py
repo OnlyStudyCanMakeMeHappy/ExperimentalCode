@@ -261,7 +261,7 @@ def loader_init(args , abs_train_dataset , rel_train_dataset, test_dataset, val_
     #absolute informat evaluate dataloader  -------fix the sequence --------a copy
     abs_eval_loader = DataLoader(
         abs_train_dataset,
-        shuffle = None,
+        shuffle = False,
         batch_size = args.eval_batch_size,
         pin_memory = True,
         num_workers = args.workers

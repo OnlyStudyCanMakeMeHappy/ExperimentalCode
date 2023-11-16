@@ -32,6 +32,7 @@ class MultiTaskModel(nn.Module):
         else:
             raise Exception("Only two task,The task_id must be 0 or 1!")
         return output
+        #return feature , output
 
 if __name__ == "__main__":
     model = Model(128 , 128, 512)

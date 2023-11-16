@@ -13,7 +13,7 @@ from utils.common import *
 from utils.data_utils import *
 from torch.utils.tensorboard import SummaryWriter
 from datasets import FGNET, Adience, UTKFace
-
+from itertools import cycle
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -155,6 +155,65 @@ def main_and_aux_task_train(
 
     lossA , lossR = lossA.avg , lossR.avg
     return lossA, lossR
+# def train(
+#     epoch,
+#     model,
+#     loss_funcR,
+#     loss_funcA,
+#     rel_train_loader,
+#     abs_train_loader ,
+#     aug_transform,
+#     optimizer,
+# ):
+#     lossA = AverageMeter()
+#     lossR = AverageMeter()
+#     for (image , label) in abs_train_loader:
+#         image = image.to(args.gpu, non_blocking = True)
+#         label = label.to(args.gpu, non_blocking = True)
+#         embedding = model(image)
+#         loss = loss_funcA(embedding, label)
+#         lossA.update(loss.item() , label.size(0))
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+#
+#     # for (data,aug_data), label in rel_train_loader:
+#     #     data = data.to(args.gpu , non_blocking = True)
+#     #     aug_data = aug_data.to(args.gpu, non_blocking = True)
+#     #     pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+#     #     idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+#     #     #pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+#     #     embedding = model(data)
+#     #     aug_embedding = model(aug_data)[idx]
+#     #     x_embedding = embedding[idx]
+#     #     y_embedding = embedding[idy]
+#     #
+#     #     # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+#     #     #loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
+#     #
+#     #     lossR.update(loss.item() / args.Lambda , label.size(0))
+#     #     optimizer.zero_grad()
+#     #     loss.backward()
+#     #
+#     #     optimizer.step()
+#     for data, label in rel_train_loader:
+#         data = data.to(args.gpu, non_blocking=True)
+#         pairs_indices, pairs_labels = construct_partial_pairs(label, args.gpu)
+#         idx, idy = pairs_indices[:, 0], pairs_indices[:, 1]
+#         # pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+#         embedding = model(data)
+#         x_embedding = embedding[idx]
+#         y_embedding = embedding[idy]
+#
+#         # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+#         # loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
+#
+#         lossR.update(loss.item() / args.Lambda, label.size(0))
+#         optimizer.zero_grad()
+#         loss.backward()
+#
+#         optimizer.step()
+#     return lossA.avg , lossR.avg
 def train(
     epoch,
     model,
@@ -162,58 +221,35 @@ def train(
     loss_funcA,
     rel_train_loader,
     abs_train_loader ,
-    aug_transform,
     optimizer,
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-    for (image , label) in abs_train_loader:
-        image = image.to(args.gpu, non_blocking = True)
-        label = label.to(args.gpu, non_blocking = True)
-        embedding = model(image)
-        loss = loss_funcA(embedding, label)
-        lossA.update(loss.item() , label.size(0))
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    for (image, label),  (data, _)in zip(cycle(abs_train_loader) , rel_train_loader):
+        image = image.to(args.gpu, non_blocking=True)
+        label = label.to(args.gpu, non_blocking=True)
+        embedding_labeled = model(image)
+        loss_abs = loss_funcA(embedding_labeled, label)
+        lossA.update(loss_abs.item(), label.size(0))
 
-    # for (data,aug_data), label in rel_train_loader:
-    #     data = data.to(args.gpu , non_blocking = True)
-    #     aug_data = aug_data.to(args.gpu, non_blocking = True)
-    #     pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
-    #     idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-    #     #pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
-    #     embedding = model(data)
-    #     aug_embedding = model(aug_data)[idx]
-    #     x_embedding = embedding[idx]
-    #     y_embedding = embedding[idy]
-    #
-    #     # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-    #     #loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
-    #
-    #     lossR.update(loss.item() / args.Lambda , label.size(0))
-    #     optimizer.zero_grad()
-    #     loss.backward()
-    #
-    #     optimizer.step()
-    for data, label in rel_train_loader:
         data = data.to(args.gpu, non_blocking=True)
-        pairs_indices, pairs_labels = construct_partial_pairs(label, args.gpu)
-        idx, idy = pairs_indices[:, 0], pairs_indices[:, 1]
-        # pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+        pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
+        idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+        pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
         embedding = model(data)
         x_embedding = embedding[idx]
         y_embedding = embedding[idy]
 
-        # loss = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
-        # loss = torch.mean(F.relu(0.1 + F.pairwise_distance(x_embedding, aug_embedding) - F.pairwise_distance(y_embedding, aug_embedding))) * args.Lambda
+        loss_rel = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
 
-        lossR.update(loss.item() / args.Lambda, label.size(0))
+        lossR.update(loss_rel.item() / args.Lambda , label.size(0))
+
+        loss = loss_abs + args.Lambda * loss_rel
         optimizer.zero_grad()
         loss.backward()
-
         optimizer.step()
-    return lossA.avg , lossR.avg
+
+    return lossA.avg, lossR.avg
 def main():
     fix_seed(0)
 
