@@ -4,6 +4,8 @@ import time, math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.datasets
+
 import losses
 import datetime
 import json
@@ -64,8 +66,8 @@ parser.add_argument('--eval_batch_size', default=128, type=int)
 # ==============================optimizer and scheduler==========================#
 parser.add_argument('--lr', default=1e-4, type=float)
 parser.add_argument('--weight_decay', default=1e-5, type=float)
-parser.add_argument('--lr_scheduler', '-ls', dest='ls', default='multi_step', type=str,
-                    choices=['multi_step', 'cosine_anneal'])  # dest: specify the attribute name used in the result name
+parser.add_argument('--lr_scheduler', '-ls', dest='ls', default=None, type=str,
+                    choices=['multi_step', 'cosine_anneal', 'None'])  # dest: specify the attribute name used in the result name
 parser.add_argument('--milestones', default=[30, 60, 90], nargs="+", type=int)
 parser.add_argument('--lr_decay_gamma', default=0.1, type=float)
 parser.add_argument('--warm_up_epochs', default=10, type=int)
@@ -243,12 +245,17 @@ def train(
     #for ((data,aug_data),_) in rel_train_loader:
         data = data.to(args.gpu, non_blocking=True)
         aug_data = aug_data.to(args.gpu, non_blocking=True)
-        unlab_outputs = model(data)
-        pi_outputs = model(aug_data)
-        cons_loss = cons_criterion(unlab_outputs, pi_outputs) * w
-        lossR.update(cons_loss.item(), data.size(0))
+        weak_outputs,weak_feat = model(data , 1)
+        strong_outputs,strong_feat  = model(aug_data , 1)
+        weak_logits = F.softmax(weak_outputs, dim = 1)
+        strong_logits = F.softmax(strong_outputs, dim = 1)
+        mask = torch.max(weak_logits, dim=1)[0] > 0.95
+        loss_pseudo = torch.mean(torch.sum(-weak_logits * torch.log(strong_logits), dim=1) * mask)
 
-        loss = sup_loss + args.Lambda * w * cons_loss
+        loss_dist = torch.mean(torch.cosine_similarity(weak_feat, strong_feat, dim = 1))
+        lossR.update(loss_dist.item() + loss_pseudo.item() , data.size(0))
+
+        loss = sup_loss + loss_pseudo + loss_dist
 
         optimizer.zero_grad()
         #cons_loss.backward()
@@ -261,14 +268,15 @@ def main():
     fix_seed(0)
 
     #model = MultiTaskModel(f_dim=args.dim, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
-    model = MultiTaskModel(f_dim = 8, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
+    model = MultiTaskModel(f_dim = 10, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
 
     base_transform, aug_transform, test_transform = get_transforms()
 
     # ===================================================================================================#
     #                                         Dataset Related                                            #
     # ===================================================================================================#
-    dataset = args.data()
+    #dataset = args.data()
+    dataset = torchvision.datasets.CIFAR10(root = './data', train = True)
     dataset_name = dataset.__class__.__name__
     '''
     train : test : val = 8 : 1 : 1
@@ -403,8 +411,8 @@ def main():
             # logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
             logger.info(eval_results)
 
-    # checkpoint = torch.load(model_save_path)
-    # model.load_state_dict(checkpoint)
+    checkpoint = torch.load(model_save_path)
+    model.load_state_dict(checkpoint)
     eval_results = Evaluation(test_loader, abs_eval_loader, model, args)
     record(vars(args), eval_results)
 

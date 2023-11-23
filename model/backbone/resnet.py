@@ -11,13 +11,21 @@ class ResNet50(nn.Module):
         super(ResNet50, self).__init__()
 
         model = resnet50(weights = ResNet50_Weights.DEFAULT)
-        model.fc = nn.Identity()
-        model.avgpool = GMP_and_GAP()
+        self.extractor = nn.Sequential(*list(model.children())[:-2])
+        #model.fc = nn.Identity()
+        #model.avgpool = GMP_and_GAP()
+        num_channels = 2048
+        height, width = 7, 7
+        self.fc = nn.Linear(num_channels * height * width, 128)
+        #self.avgpool = GMP_and_GAP()
+        self.avgpool = model.avgpool
         self.model = model
     def forward(self, x):
-        x = self.model(x)
-        x = x.view(x.size(0) , -1)
-        return x
+        # x : 提取到的特征
+        x = self.extractor(x)
+        feat = self.fc(x.view(x.size(0), -1))
+        x = self.avgpool(x)
+        return x.view(x.size(0) , -1) , feat
 
 class ResNet18(nn.Module):
     output_size = 512

@@ -22,16 +22,12 @@ class MultiTaskModel(nn.Module):
         self.g_head = MLP(feature_size=output_size, embedding_size=g_dim , hidden_size=g_hidden_size)
 
 
-    def forward(self , x , task_id : int = 0):
-        feature = self.backbone(x)
-        #output = self.f_head(feature)
-        if task_id == 0:
-            output = self.f_head(feature)
-        elif task_id == 1:
-            output = self.g_head(feature)
+    def forward(self , x, tag = 0):
+        x, feat = self.backbone(x)
+        if tag == 0:
+            return self.f_head(x)
         else:
-            raise Exception("Only two task,The task_id must be 0 or 1!")
-        return output
+            return self.f_head(x) , feat
         #return feature , output
 
 if __name__ == "__main__":

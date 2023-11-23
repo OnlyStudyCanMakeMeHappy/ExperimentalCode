@@ -32,7 +32,7 @@ class CustomSubset(Subset):
     def __init__(self , dataset : Dataset, indices, transform = None):
         super().__init__(dataset, indices)
         self.transform = transform
-        self.labels = [self.dataset.labels[index] for index in indices]
+        self.labels = [self.dataset.targets[index] for index in indices]
     def __len__(self):
         return len(self.indices)
     def __getitem__(self, item):
