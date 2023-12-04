@@ -22,12 +22,9 @@ class MultiTaskModel(nn.Module):
         self.g_head = MLP(feature_size=output_size, embedding_size=g_dim , hidden_size=g_hidden_size)
 
 
-    def forward(self , x, tag = 0):
-        x, feat = self.backbone(x)
-        if tag == 0:
-            return self.f_head(x)
-        else:
-            return self.f_head(x) , feat
+    def forward(self , x):
+        x =  self.backbone(x)
+        return self.f_head(x)
         #return feature , output
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-from torchvision.models import resnet50, ResNet50_Weights, resnet18, ResNet18_Weights
+from torchvision.models import resnet50, ResNet50_Weights, resnet18, ResNet18_Weights, wide_resnet50_2
 import torch.nn as nn
 
 __all__ = ["ResNet50" , "ResNet18"]
@@ -11,21 +11,14 @@ class ResNet50(nn.Module):
         super(ResNet50, self).__init__()
 
         model = resnet50(weights = ResNet50_Weights.DEFAULT)
-        self.extractor = nn.Sequential(*list(model.children())[:-2])
-        #model.fc = nn.Identity()
-        #model.avgpool = GMP_and_GAP()
-        num_channels = 2048
-        height, width = 7, 7
-        self.fc = nn.Linear(num_channels * height * width, 128)
-        #self.avgpool = GMP_and_GAP()
-        self.avgpool = model.avgpool
+        #model = wide_resnet50_2(pretrained = True)
+        model.fc = nn.Identity()
+        model.avgpool = GMP_and_GAP()
         self.model = model
     def forward(self, x):
-        # x : 提取到的特征
-        x = self.extractor(x)
-        feat = self.fc(x.view(x.size(0), -1))
-        x = self.avgpool(x)
-        return x.view(x.size(0) , -1) , feat
+        x = self.model(x)
+        x = x.view(x.size(0) , -1)
+        return x
 
 class ResNet18(nn.Module):
     output_size = 512

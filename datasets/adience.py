@@ -32,18 +32,18 @@ class Adience(Dataset):
         data = pd.concat(data_list, ignore_index=True)
         # 删除age = None的行
         data = data.dropna(subset=['age'])
-        self.labels = []
+        self.targets = []
         self.image_path = []
         self.images = []
         self.transform = transform
         for _, row in data.iterrows():
             # pandas version 2.0.2
             if row.age:
-                self.labels.append(age_to_label_map[age_mapping_dict[row.age]])
+                self.targets.append(age_to_label_map[age_mapping_dict[row.age]])
                 img_path = f"{self.root}/images/{row.user_id}/landmark_aligned_face.{row.face_id}.{row.original_image}"
                 self.image_path.append(img_path)
                 #self.images.append(Image.open(img_path))
-        self.classes = list(set(self.labels))
+        self.classes = list(set(self.targets))
 
     def __len__(self):
         return len(self.image_path)
@@ -53,7 +53,7 @@ class Adience(Dataset):
         image = cv2.cvtColor(cv2.imread(self.image_path[item]), cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         #image = self.images[item]
-        label = self.labels[item]
+        label = self.targets[item]
         if self.transform is not None:
             image = self.transform(image)
         return image, label

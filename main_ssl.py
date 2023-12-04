@@ -225,7 +225,7 @@ def train(
         epoch = np.clip(epoch, 0.0, 30)
         phase = 1.0 - epoch / 30
         w = float(np.exp(-5.0 * phase * phase))
-
+    s = 0
     ce_criterion = nn.CrossEntropyLoss()
     cons_criterion = lambda logit1, logit2 : F.mse_loss(F.softmax(logit1,1), F.softmax(logit2,1))
     for (image, label),  ((data, aug_data),_)in zip(cycle(abs_train_loader) , rel_train_loader):
@@ -238,45 +238,40 @@ def train(
         sup_loss = ce_criterion(outputs, label)
         lossA.update(sup_loss.item(), label.size(0))
 
-        # optimizer.zero_grad()
-        # sup_loss.backward()
-        # optimizer.step()
-
-    #for ((data,aug_data),_) in rel_train_loader:
+        thershold = 0.1
         data = data.to(args.gpu, non_blocking=True)
         aug_data = aug_data.to(args.gpu, non_blocking=True)
-        weak_outputs,weak_feat = model(data , 1)
-        strong_outputs,strong_feat  = model(aug_data , 1)
-        weak_logits = F.softmax(weak_outputs, dim = 1)
-        strong_logits = F.softmax(strong_outputs, dim = 1)
-        mask = torch.max(weak_logits, dim=1)[0] > 0.95
-        loss_pseudo = torch.mean(torch.sum(-weak_logits * torch.log(strong_logits), dim=1) * mask)
+        w_logits = F.softmax(model(data) , 1)
+        w_prob, pseudo_label = w_logits.max(1)
+        mask = w_prob.ge(thershold).float()
+        s += torch.sum(mask).item()
+        s_outputs = model(aug_data)
+        cons_loss = torch.mean(mask * ce_criterion(s_outputs, pseudo_label))
+        loss = sup_loss + cons_loss * w
 
-        loss_dist = torch.mean(torch.cosine_similarity(weak_feat, strong_feat, dim = 1))
-        lossR.update(loss_dist.item() + loss_pseudo.item() , data.size(0))
-
-        loss = sup_loss + loss_pseudo + loss_dist
+        lossR.update(cons_loss.item(), data.size(0))
 
         optimizer.zero_grad()
         #cons_loss.backward()
         loss.backward()
         optimizer.step()
 
+    if epoch > 10 : print(s)
 
     return lossA.avg, lossR.avg
 def main():
     fix_seed(0)
 
     #model = MultiTaskModel(f_dim=args.dim, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
-    model = MultiTaskModel(f_dim = 10, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
+    model = MultiTaskModel(f_dim = 8, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
 
     base_transform, aug_transform, test_transform = get_transforms()
 
     # ===================================================================================================#
     #                                         Dataset Related                                            #
     # ===================================================================================================#
-    #dataset = args.data()
-    dataset = torchvision.datasets.CIFAR10(root = './data', train = True)
+    dataset = args.data()
+    #dataset = torchvision.datasets.CIFAR10(root = './data', train = True)
     dataset_name = dataset.__class__.__name__
     '''
     train : test : val = 8 : 1 : 1
@@ -308,7 +303,7 @@ def main():
     params_group = [
         {'params': model.backbone.parameters(), 'lr': args.lr},
         {'params': model.f_head.parameters(), 'lr': args.lr * 10},
-        {'params': model.g_head.parameters(), 'lr': args.lr * 10},
+        #{'params': model.g_head.parameters(), 'lr': args.lr * 10},
     ]
 
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
@@ -361,7 +356,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         start_time = time.perf_counter()
         model.train()
-        freeze_BN(model)
+        #freeze_BN(model)
         if args.fuse:
             #lossA , lossR = main_and_aux_task_train(epoch,model,loss_funcA,rel_train_loader,abs_train_loader,optimizer)
             lossA, lossR = train(epoch ,model, loss_funcA, rel_train_loader, abs_train_loader,optimizer)
