@@ -23,8 +23,8 @@ class FGNET(Dataset):
                 if label >= intervals[i]:
                     self.groupIds.append(i)
                     break
-        self.labels = self.groupIds
-        self.classes = list(set(self.labels))
+        self.targets = self.groupIds
+        self.classes = list(set(self.targets))
 
     def __len__(self):
         return len(self.images)
@@ -33,6 +33,6 @@ class FGNET(Dataset):
         image = self.images[index]
         if self.transform is not None:
             image = self.transform(image)
-        label = self.labels[index]
+        label = self.targets[index]
         #label = self.groupIds[index]
         return image, label

@@ -14,7 +14,7 @@ from model.Model import MultiTaskModel
 from utils.common import *
 from utils.data_utils import *
 from torch.utils.tensorboard import SummaryWriter
-from datasets import FGNET, Adience, UTKFace
+from datasets import FGNET, Adience, UTKFace, HistoricalColor, ImageAesthetics
 from itertools import cycle
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -38,6 +38,8 @@ parser.add_argument('--data', default=FGNET,
                         "FGNET": FGNET,
                         "Adience": Adience,
                         'UTKFace': UTKFace,
+                        'HistoricalColor' : HistoricalColor,
+                        'AES' : ImageAesthetics,
                     }, action=ChoiceAction)
 parser.add_argument('--dim', default=128, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
@@ -93,16 +95,16 @@ def dml_train(
         optimizer,
 ):
     lossA = AverageMeter()
-    ce_criterion = nn.CrossEntropyLoss()
+    #ce_criterion = nn.CrossEntropyLoss()
     # for (image , label) in tqdm.tqdm(abs_train_loader, desc =f"Epoch:{epoch}/{args.epochs}" ,colour='blue' , ncols = 100, ascii = True):
     for image, label in abs_train_loader:
         image = image.to(args.gpu, non_blocking=True)
         label = label.to(args.gpu, non_blocking=True)
-        #embedding = model(image)
-        outputs = model(image)
+        embedding = model(image)
+        #outputs = model(image)
         #loss_abs = loss_funcA(embedding_labeled, label)
-        loss = ce_criterion(outputs, label)
-        #loss = loss_func(embedding, label)
+        #loss = ce_criterion(outputs, label)
+        loss = loss_func(embedding, label)
         lossA.update(loss.item(), label.size(0))
         optimizer.zero_grad()
         loss.backward()
@@ -165,50 +167,6 @@ def main_and_aux_task_train(
     lossA, lossR = lossA.avg, lossR.avg
     return lossA, lossR
 
-'''
-def train(
-        model,
-        loss_funcA,
-        rel_train_loader,
-        abs_train_loader,
-        optimizer,
-):
-    lossA = AverageMeter()
-    lossR = AverageMeter()
-    for (image, label),  ((data, aug_data),_)in zip(cycle(abs_train_loader) , rel_train_loader):
-        image = image.to(args.gpu, non_blocking=True)
-        label = label.to(args.gpu, non_blocking=True)
-        feature_labeled = model.backbone(image)
-        embedding_labeled = model.f_head(feature_labeled)
-        loss_abs = loss_funcA(embedding_labeled, label)
-        lossA.update(loss_abs.item(), label.size(0))
-
-        data = data.to(args.gpu, non_blocking=True)
-
-        feature_unlabeled = model.backbone(data)
-        feature_all = torch.cat([feature_labeled , feature_unlabeled])
-
-        embedding_unlabeled = model.f_head(feature_unlabeled)
-        embedding_all = torch.cat([embedding_labeled , embedding_unlabeled])
-
-        sigma = 1.0
-        sim_mat = torch.exp(-torch.cdist(embedding_all , embedding_all) ** 2 / (2 * sigma ** 2))
-        #loss_s = 0.5 *  torch.sum(torch.cdist(feature_all , feature_all) ** 2 * sim_mat)
-        loss_s = 0.5 * torch.sum(torch.sum((feature_all[:, None, :] - feature_all[None, :, :]) ** 2, dim = - 1) * sim_mat)
-
-        aug_data = aug_data.to(args.gpu, non_blocking = True)
-        aug_embedding = model(aug_data)
-        loss_aug = torch.mean(F.relu(F.pairwise_distance(embedding_unlabeled, aug_embedding) - 0.1))
-
-        lossR.update(loss_s.item() + loss_aug.item())
-
-        loss = loss_abs + args.Lambda * loss_s + args.Lambda * loss_aug
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    return lossA.avg, lossR.avg
-'''
 def train(
         epoch,
         model,
@@ -233,20 +191,25 @@ def train(
     #for (image , label) in abs_train_loader:
         image = image.to(args.gpu, non_blocking=True)
         label = label.to(args.gpu, non_blocking=True)
-        outputs = model(image)
-        #loss_abs = loss_funcA(embedding_labeled, label)
-        sup_loss = ce_criterion(outputs, label)
+        #outputs = model(image)
+        embedding_labeled = model(image)
+        sup_loss = loss_funcA(embedding_labeled, label)
+        #sup_loss = ce_criterion(outputs, label)
         lossA.update(sup_loss.item(), label.size(0))
+        # optimizer.zero_grad()
+        # sup_loss.backward()
+        # #loss.backward()
+        # optimizer.step()
 
-        thershold = 0.1
+    #for ((data, aug_data),_) in rel_train_loader:
+        #thershold = 0.1
         data = data.to(args.gpu, non_blocking=True)
         aug_data = aug_data.to(args.gpu, non_blocking=True)
-        w_logits = F.softmax(model(data) , 1)
-        w_prob, pseudo_label = w_logits.max(1)
-        mask = w_prob.ge(thershold).float()
-        s += torch.sum(mask).item()
-        s_outputs = model(aug_data)
-        cons_loss = torch.mean(mask * ce_criterion(s_outputs, pseudo_label))
+        with torch.no_grad():
+           w_embeddings = model(data).detach()
+        #w_embeddings = model(data)
+        s_embeddings = model(aug_data)
+        cons_loss = torch.mean(F.relu(F.pairwise_distance(w_embeddings , s_embeddings) - 0.1)) * w
         loss = sup_loss + cons_loss * w
 
         lossR.update(cons_loss.item(), data.size(0))
@@ -256,14 +219,13 @@ def train(
         loss.backward()
         optimizer.step()
 
-    if epoch > 10 : print(s)
 
     return lossA.avg, lossR.avg
 def main():
     fix_seed(0)
 
-    #model = MultiTaskModel(f_dim=args.dim, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
-    model = MultiTaskModel(f_dim = 8, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
+    model = MultiTaskModel(f_dim=args.dim, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
+    #model = MultiTaskModel(f_dim = 8, g_dim=2048, g_hidden_size=512, Backbone=args.backbone).to(args.gpu)
 
     base_transform, aug_transform, test_transform = get_transforms()
 
@@ -356,7 +318,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         start_time = time.perf_counter()
         model.train()
-        #freeze_BN(model)
+        freeze_BN(model)
         if args.fuse:
             #lossA , lossR = main_and_aux_task_train(epoch,model,loss_funcA,rel_train_loader,abs_train_loader,optimizer)
             lossA, lossR = train(epoch ,model, loss_funcA, rel_train_loader, abs_train_loader,optimizer)

@@ -213,15 +213,15 @@ def get_logger(logger_name = None):
 @timer
 #def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
 def Evaluation(test_loader, train_loader, model ,args):
-    model.eval()
-    device = 'cpu' if args.gpu is None else args.gpu
-    pred = torch.LongTensor().to(device)
-    test_labels = torch.LongTensor().to(device)
-    for batch_idx, (data, targets) in enumerate(test_loader):
-        data, targets = data.to(device), targets.to(device)
-        pred = torch.cat([pred, torch.argmax(model(data), dim = 1)] , 0)
-        test_labels = torch.cat((test_labels, targets))
-    """
+    # model.eval()
+    # device = 'cpu' if args.gpu is None else args.gpu
+    # pred = torch.LongTensor().to(device)
+    # test_labels = torch.LongTensor().to(device)
+    # for batch_idx, (data, targets) in enumerate(test_loader):
+    #     data, targets = data.to(device), targets.to(device)
+    #     pred = torch.cat([pred, torch.argmax(model(data), dim = 1)] , 0)
+    #     test_labels = torch.cat((test_labels, targets))
+
     reference_embeddings, reference_labels = extract_features(train_loader, model, args)
     test_embeddings, test_labels = extract_features(test_loader, model, args)
 
@@ -231,9 +231,9 @@ def Evaluation(test_loader, train_loader, model ,args):
     pred = predict(reference_embeddings, reference_labels, test_embeddings, args.k)
     #test_labels = test_labels.numpy()
     test_labels = test_labels.cpu().numpy()
-    """
-    pred = pred.cpu().numpy()
-    test_labels = test_labels.cpu().numpy()
+
+    # pred = pred.cpu().numpy()
+    # test_labels = test_labels.cpu().numpy()
     acc = np.mean(pred == test_labels)
 
     return {
