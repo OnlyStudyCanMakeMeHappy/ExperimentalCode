@@ -5,15 +5,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import losses
-import datetime
-import json
-
 from model.Model import MultiTaskModel
 from utils.common import *
 from utils.data_utils import *
 from torch.utils.tensorboard import SummaryWriter
-from datasets import FGNET, Adience, UTKFace, HistoricalColor, ImageAesthetics
-from itertools import cycle
+from datasets import FGNET, Adience, UTKFace
+import datetime
+import json
+
 
 # 启动命令 : tensorboard --logdir=/path/to/logs/ --port=xxxx
 parser = argparse.ArgumentParser(description="Train Model")
@@ -33,8 +32,6 @@ parser.add_argument('--data', default = FGNET,
                         "FGNET" : FGNET,
                         "Adience" : Adience,
                         'UTKFace' : UTKFace,
-                        'HistoricalColor' : HistoricalColor,
-                        'AES' : ImageAesthetics,
                     } , action = ChoiceAction)
 parser.add_argument('--dim', default= 128, type=int, help='embedding size')
 parser.add_argument('--epochs', default=100, type=int)
@@ -74,14 +71,12 @@ parser.add_argument('--fuse' , action = "store_true", help = "whether fuse the r
 parser.add_argument('--aug', action = 'store_true', help = 'Whether to do data augmentation for the head samples')
 parser.add_argument('--loss', default='triplet', choices=['ms', 'triplet', 'margin'])
 parser.add_argument('--mu', default = 0.8,type = float)
-parser.add_argument('--Lambda', default = 1.0 ,type = float)
+parser.add_argument('--Lambda', default = 0.8 ,type = float)
 # 绝对信息的margin
 parser.add_argument('--delta', default= 0.1,type = float)
 parser.add_argument('--vartheta', '-vt', default = 0.1,type = float)
 parser.add_argument('--varepsilon', '-ve', default = 0.1, type = float)
 
-#train mode
-parser.add_argument('--mode' , default = 0, choices = [0 , 1, 2], type=int)
 
 args = parser.parse_args()
 
@@ -104,61 +99,61 @@ def dml_train(
         optimizer.step()
 
     return lossA.avg
-def train_ssl(
-        epoch,
+
+def main_and_aux_task_train(
         model,
+        loss_funcR,
         loss_funcA,
         rel_train_loader,
-        abs_train_loader,
-        optimizer,
+        abs_train_loader ,
+        aug_transform,
+        optimizer
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-    # exp{−5 * (1 − T)^2}
-    w = 1.0
-    if epoch < 30:
-        epoch = np.clip(epoch, 0.0, 30)
-        phase = 1.0 - epoch / 30
-        w = float(np.exp(-5.0 * phase * phase))
-    #ce_criterion = nn.CrossEntropyLoss()
-    #cons_criterion = lambda logit1, logit2 : F.mse_loss(F.softmax(logit1,1), F.softmax(logit2,1))
-    #for (image, label),  ((data, aug_data),_)in zip(cycle(abs_train_loader) , rel_train_loader):
-    #for (image, label), ((data, aug_data), _) in zip(abs_train_loader, rel_train_loader):
-    for (image , label) in abs_train_loader:
-        image = image.to(args.gpu, non_blocking=True)
-        label = label.to(args.gpu, non_blocking=True)
-        #outputs = model(image)
-        embedding_labeled = model(image)
-        sup_loss = loss_funcA(embedding_labeled, label)
-        lossA.update(sup_loss.item(), label.size(0))
-        optimizer.zero_grad()
-        sup_loss.backward()
-        optimizer.step()
+    task_mask = [0] * len(abs_train_loader) + [1] * len(rel_train_loader)
+    random.shuffle(task_mask)
+    iterA , iterR = iter(abs_train_loader) , iter(rel_train_loader)
+    # asill = True, 123456789#
+    #for task_id in tqdm.tqdm(task_mask, desc =f"Epoch:{epoch}/{args.epochs}" ,colour='green' , ncols = 80, ascii = True):
+    for task_id in task_mask:
+        if task_id == 1:
+            data , label = next(iterR)
+            data = data.to(args.gpu , non_blocking = True)
+            # 在线构建偏序对
+            pairs_indices , pairs_labels =  construct_partial_pairs(label , args.gpu)
+            idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
+            #pairs_labels = pairs_labels.to(args.gpu)
+            #代理
+            embedding = model(data)
+            P = F.normalize(loss_funcA.proxies, p=2, dim=-1).to(args.gpu)
 
+            dist = torch.cdist(embedding , P)
+            prob = torch.softmax(-dist, dim=1)
+            CDF = torch.cumsum(prob, dim=1)
+            P_X_less_Y = torch.sum(prob[idy, 1:] * CDF[idx, : -1], dim=1)
+            P_Y_less_X = torch.sum(prob[idx, 1:] * CDF[idy, : -1], dim=1)
+            loss = -torch.mean(torch.log(torch.where(pairs_labels == 0, P_X_less_Y, P_Y_less_X))) * args.Lambda
 
-    for ((data , aug_data), _) in rel_train_loader:
-        #thershold = 0.1
-        data = data.to(args.gpu, non_blocking=True)
-        aug_data = aug_data.to(args.gpu, non_blocking=True)
-        with torch.no_grad():
-            w_embeddings = model(data).detach()
-        #w_embeddings = model(data)
-        s_embeddings = model(aug_data)
-        cons_loss = torch.mean(F.relu(F.pairwise_distance(w_embeddings , s_embeddings) - 0.1)) * w
-        #loss = sup_loss + cons_loss * w
-        lossR.update(cons_loss.item() / w, data.size(0))
-        #cons_loss *= w
+            lossR.update(loss.item() / args.Lambda , label.size(0))
 
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
+        else:
+            image , label = next(iterA)
+            image = image.to(args.gpu, non_blocking = True)
+            label = label.to(args.gpu, non_blocking = True)
+            embedding = model(image)
+            loss = loss_funcA(embedding, label)
+            lossA.update(loss.item() , label.size(0))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        optimizer.zero_grad()
-        #loss.backward()
-        cons_loss.backward()
-        optimizer.step()
-
-
-    return lossA.avg, lossR.avg
-
+    lossA , lossR = lossA.avg , lossR.avg
+    return lossA, lossR
 def train(
     epoch,
     model,
@@ -166,39 +161,48 @@ def train(
     loss_funcA,
     rel_train_loader,
     abs_train_loader ,
+    aug_transform,
     optimizer,
 ):
     lossA = AverageMeter()
     lossR = AverageMeter()
-    for (image, target) in abs_train_loader:
-
-        image = image.to(args.gpu, non_blocking=True)
-        target = target.to(args.gpu, non_blocking=True)
-        embedding_labeled = model(image)
-        loss_abs = loss_funcA(embedding_labeled, target)
-        lossA.update(loss_abs.item(), target.size(0))
+    for (image , label) in abs_train_loader:
+        image = image.to(args.gpu, non_blocking = True)
+        label = label.to(args.gpu, non_blocking = True)
+        embedding = model(image)
+        loss = loss_funcA(embedding, label)
+        lossA.update(loss.item() , label.size(0))
         optimizer.zero_grad()
-        loss_abs.backward()
+        loss.backward()
         optimizer.step()
-    for (data, label) in rel_train_loader:
-        data = data.to(args.gpu, non_blocking=True)
+    # if epoch <= 31:
+    #     return lossA.avg, lossR.avg
+    for index, (data, label) in enumerate(rel_train_loader):
+        label = label.to(args.gpu)
+        data = data.to(args.gpu , non_blocking = True)
         pairs_indices, pairs_labels = construct_partial_pairs(label , args.gpu)
         idx , idy = pairs_indices[ : , 0], pairs_indices[ : , 1]
-        pairs_labels = pairs_labels.to(args.gpu, non_blocking = True)
+
+        #代理
         embedding = model(data)
-        x_embedding = embedding[idx]
-        y_embedding = embedding[idy]
 
-        loss_rel = loss_funcR(torch.cat((x_embedding, y_embedding), dim = 1), pairs_labels) * args.Lambda
+        P = F.normalize(loss_funcA.proxies, p=2, dim=-1).to(args.gpu)
 
-        lossR.update(loss_rel.item() / args.Lambda , label.size(0))
+        dist = torch.cdist(embedding , P)
+        prob = torch.softmax(-dist, dim=1)
+        CDF = torch.cumsum(prob, dim=1)
+        P_X_less_Y = torch.sum(prob[idy, 1:] * CDF[idx, : -1], dim=1)
+        P_Y_less_X = torch.sum(prob[idx, 1:] * CDF[idy, : -1], dim=1)
+        loss = -torch.mean(torch.log(torch.where(pairs_labels == 0, P_X_less_Y, P_Y_less_X))) * args.Lambda
 
-        #loss = loss_abs + args.Lambda * loss_rel
+        lossR.update(loss.item() / args.Lambda , label.size(0))
+
         optimizer.zero_grad()
-        loss_rel.backward()
+        loss.backward()
         optimizer.step()
 
-    return lossA.avg, lossR.avg
+
+    return lossA.avg , lossR.avg
 def main():
     fix_seed(0)
 
@@ -211,10 +215,8 @@ def main():
 # ===================================================================================================#
     dataset = args.data()
     dataset_name = dataset.__class__.__name__
-    if not args.mode == 2:
-        aug_transform = None
 
-    spilt_datasets = process_dataset(dataset, 0.8, 0.1, base_transform, test_transform, aug_transform = aug_transform)
+    spilt_datasets = process_dataset(dataset, 0.8, 0.1, tx = base_transform,ty = test_transform)
     details_info_print(spilt_datasets , dataset.classes)
     abs_train_dataset, rel_train_dataset, test_dataset, val_dataset = spilt_datasets.values()
 
@@ -231,6 +233,8 @@ def main():
     )
 #=======================================loss function==============================================#
     loss_funcR , loss_funcA = losses.Tripletloss(args)
+    #loss_funcA = losses.ProxyNCALoss(len(dataset.classes) , args.dim, args.gpu)
+    loss_funcA = losses.ProxyRankingLoss(len(dataset.classes), args.dim).to(args.gpu)
 #===================================================================================================#
 #                                                                                                   #
 #                       Optimizer and learning rate scheduler Configuration                         #
@@ -239,7 +243,8 @@ def main():
     params_group = [
         {'params': model.backbone.parameters(), 'lr': args.lr},
         {'params': model.f_head.parameters(), 'lr': args.lr * 10},
-        #{'params': model.g_head.parameters(), 'lr': args.lr * 10},
+        {'params': model.g_head.parameters(), 'lr': args.lr * 10},
+        {'params': loss_funcA.parameters(), 'lr': args.lr * 10},
     ]
 
     optimizer = torch.optim.Adam(params_group, weight_decay=args.weight_decay)
@@ -291,12 +296,9 @@ def main():
         start_time = time.perf_counter()
         model.train()
         freeze_BN(model)
-        if args.mode > 0:
-            #lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
-            if args.mode == 1:
-                lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,optimizer)
-            elif args.mode == 2:
-                lossA, lossR = train_ssl(epoch, model, loss_funcA, rel_train_loader, abs_train_loader, optimizer)
+        if args.fuse:
+            lossA , lossR = main_and_aux_task_train(model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
+            #lossA , lossR = train(epoch , model,loss_funcR,loss_funcA,rel_train_loader,abs_train_loader,aug_transform,optimizer)
             loss_total = lossA + args.Lambda * lossR
             if args.record:
                 writer.add_scalars("loss", {
@@ -318,7 +320,9 @@ def main():
             lr_scheduler.step()
 #            print(lr_scheduler.get_last_lr())
         if epoch % args.val_epoch == 0 or epoch == args.epochs:
-            res = Evaluation(val_loader , abs_eval_loader, model, args)
+            #res = Evaluation(val_loader , abs_eval_loader, model, args)
+            res = Evaluation_P(val_loader, loss_funcA.proxies, model, args)
+
             print(dict2str(res , '='))
             if args.record:
                 writer.add_scalars("Metrics", res, epoch // args.val_epoch)
@@ -337,11 +341,15 @@ def main():
             #     break
 
     ### show the best metric
-    if args.record:
-        with open(os.path.join(result_root, 'best_result.txt')) as f:
-            eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
-            #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
-            logger.info(eval_results)
+    # if args.record:
+    #     with open(os.path.join(result_root, 'best_result.txt')) as f:
+    #         eval_results = ''.join(f.readlines()).replace('\n', ',').replace(':' , '=')
+    #         #logger.info("ACC = {ACC} , MAE = {MAE} , MSE = {MSE} , QWK = {QWK}, C-index = {C_index}".format(**eval_results))
+    #         logger.info(eval_results)
+    #     if epoch % 10 == 1:
+    #         P = F.normalize(loss_funcA.proxies , p = 2 , dim = 1)
+    #         #print(torch.matmul(P, P.T))
+    #         print(torch.cdist(P , P))
 
     checkpoint = torch.load(model_save_path)
     model.load_state_dict(checkpoint)

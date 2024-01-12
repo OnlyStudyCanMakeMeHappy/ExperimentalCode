@@ -17,13 +17,14 @@ class FGNET(Dataset):
         self.labels = [int(re.match(r'\d{3}A(\d+)\w?.JPG', name).group(1)) for name in file_names]
         self.transform = transform
         intervals = [0, 3, 11, 16, 24, 40]
-        self.groupIds = list()
+        self.groupIds = []
         for label in self.labels:
             for i in range(len(intervals) - 1, -1, -1):
                 if label >= intervals[i]:
                     self.groupIds.append(i)
                     break
-        self.classes = set(self.groupIds)
+        self.targets = self.groupIds
+        self.classes = list(set(self.targets))
 
     def __len__(self):
         return len(self.images)
@@ -32,6 +33,6 @@ class FGNET(Dataset):
         image = self.images[index]
         if self.transform is not None:
             image = self.transform(image)
-        #label = self.labels[index]
-        label = self.groupIds[index]
+        label = self.targets[index]
+        #label = self.groupIds[index]
         return image, label

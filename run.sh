@@ -1,4 +1,3 @@
 #!/bin/bash
-python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls multi_step --lr 1e-4 -j 8 --val_epoch 1
-python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls multi_step --lr 1e-4 --fuse -j 8 --val_epoch 1
-python main.py --gpu $1 --data Adience  --delta 0.2 -vt 0.2 -ve 0.2 -ls cosine_anneal --lr 1e-4 --fuse -j 8 --val_epoch 1
+python main.py --gpu 0 --data FGNET --k 5 --logdir logs/FGNET
+python main.py --gpu 0 --data Adience --fuse --aug --record

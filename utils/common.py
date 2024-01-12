@@ -13,7 +13,8 @@ import logging, colorlog
 import faiss
 from torch.utils.data import DataLoader
 import time
-
+from randaugment import RandAugment
+import copy
 def fix_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -38,6 +39,41 @@ def timer(func):
 
 
 # TODO: 根据模型做不同的transform, 特别是BnInception需要特别对待
+class AugTransform(object):
+    def __init__(self, normalize):
+        # self.normalize =  transforms.Compose([
+        #     transforms.ToTensor(),
+        #     normalize
+        # ])
+        self.transform = transforms.Compose([
+            transforms.Resize((256,256)),
+            transforms.RandomResizedCrop((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ])
+        self.strong_transform = copy.deepcopy(self.transform)
+        self.strong_transform.transforms.insert(0, RandAugment(3, 5))
+
+        s = 1.0
+        # self.aug_transform = transforms.Compose([
+        #     # transforms.Resize((256, 256)),
+        #     # transforms.RandomResizedCrop(224), # 随机裁剪缩放
+        #     transforms.RandomHorizontalFlip(),  # 随机水平翻转
+        #     transforms.GaussianBlur(kernel_size=5),
+        #     # transforms.RandomRotation(15),
+        #     # transforms.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s),
+        #     #transforms.RandomPerspective(distortion_scale=0.25, p=0.8),
+        #     #transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
+        #     #transforms.ToTensor()
+        # ])
+
+    def __call__(self, x):
+        # x = self.base_transform(x)
+        # aug_x = self.aug_transform(x)
+        # return self.normalize(x) , self.normalize(aug_x)
+        return self.transform(x) , self.strong_transform(x)
+
 def get_transforms(model: str = "ResNet50"):
     # opencv读取图片是BGR通道, ResNet : 转换通道, ToTensor()
     normalize = transforms.Normalize(
@@ -62,12 +98,8 @@ def get_transforms(model: str = "ResNet50"):
         0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s
     )
 
-    aug_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224), # 随机裁剪缩放
-        transforms.RandomHorizontalFlip(),  # 随机水平翻转
-        transforms.RandomApply([color_jitter], p=0.8), # 以0.8的概率进行颜色抖动
-        transforms.RandomGrayscale(p=0.2), # 依概率转换为灰度图像
-    ])
+    aug_transform = AugTransform(normalize)
+
     test_transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.CenterCrop((224, 224)),
@@ -101,24 +133,40 @@ def record(hyper_params, metrics):
     with open("logs.txt" , 'a') as f:
         #f.write(dict2str(hyper_params) + '\n')
         f.write(str(hyper_params)+ '\n')
-        f.write(dict2str(metrics , "=") + '\n')
+        if isinstance(metrics , dict):
+            f.write(dict2str(metrics , "=") + '\n')
+        elif isinstance(metrics , str):
+            f.write(metrics)
         f.write('\n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  --------------- \n-:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::-  -:::::::::::::- \n---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------  ---------------\n')
-def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
-    #test在reference中找topk
-    #small query batch, small index: CPU is typically faster
-    dim = reference_embeddings.size(1)
-    index = faiss.IndexFlatL2(dim)
-    index.add(reference_embeddings.numpy())
-    # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
-    D, I = index.search(query_embeddings.numpy() , k + 1)
-    # I是一个 query_size * k 的二维下标
-    # 四舍五入将浮点数转换为整数
-    return reference_labels.numpy()[I[ : , 1 : ]]
+
+# def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k):
+#     #test在reference中找topk
+#     #small query batch, small index: CPU is typically faster
+#     dim = reference_embeddings.size(1)
+#     index = faiss.IndexFlatL2(dim)
+#     index.add(reference_embeddings.numpy())
+#     # query与自身距离最近, 找 k + 1近邻, 然后ignore自身
+#     D, I = index.search(query_embeddings.numpy() , k + 1)
+#     # I是一个 query_size * k 的二维下标
+#     # 四舍五入将浮点数转换为整数
+#     return reference_labels.numpy()[I[ : , 1 : ]]
+def KNN_ind(reference_embeddings, reference_labels, query_embeddings, k, metric = "Cosine"):
+    if metric == 'Cosine':
+    # 计算距离矩阵, 进行了L2 normalize, 直接计算点积即可
+        dist_matrix = torch.mm(query_embeddings, reference_embeddings.T)
+    # dim = 1 , 沿着dim = 1的方向, 计算每一行的topk
+    elif metric == 'L2':
+        #cdist doesn't work for float16
+        if reference_embeddings.dtype == torch.float16:
+            raise Exception("The tensor type is torch.float16 which is not support of cdist ")
+        dist_matrix = -torch.cdist(query_embeddings, reference_embeddings)
+    _ , knn_indices = torch.topk(dist_matrix , k , dim = 1)
+    return reference_labels[knn_indices].numpy()
 
 def predict(reference_embeddings, reference_labels,test_embeddings, k):
     neigh = KNeighborsClassifier(n_neighbors=k)
-    neigh.fit(reference_embeddings.numpy(), reference_labels.numpy())
-    pred = neigh.predict(test_embeddings.numpy())
+    neigh.fit(reference_embeddings.cpu().numpy(), reference_labels.cpu().numpy())
+    pred = neigh.predict(test_embeddings.cpu().numpy())
     return pred
 
 def compute_c_index(labels : numpy.ndarray, predict):
@@ -163,16 +211,31 @@ def get_logger(logger_name = None):
     return logger
 
 @timer
-def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
-    reference_embeddings, reference_labels = get_embeddings_labels(test_dataset, model, args)
-    test_embeddings, test_labels = get_embeddings_labels(test_dataset, model, args)
-    """
-    knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, k)
-    pred = np.round(np.mean(knn_indices, axis=1))
-    """
-    pred = predict(reference_embeddings, reference_labels, test_embeddings, k)
-    test_labels = test_labels.numpy()
+#def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
+def Evaluation(test_loader, train_loader, model ,args):
+    # model.eval()
+    # device = 'cpu' if args.gpu is None else args.gpu
+    # pred = torch.LongTensor().to(device)
+    # test_labels = torch.LongTensor().to(device)
+    # for batch_idx, (data, targets) in enumerate(test_loader):
+    #     data, targets = data.to(device), targets.to(device)
+    #     pred = torch.cat([pred, torch.argmax(model(data), dim = 1)] , 0)
+    #     test_labels = torch.cat((test_labels, targets))
+
+    reference_embeddings, reference_labels = extract_features(train_loader, model, args)
+    test_embeddings, test_labels = extract_features(test_loader, model, args)
+
+    # knn_indices = KNN_ind(reference_embeddings, reference_labels, test_embeddings, args.k)
+    # pred = np.round(np.mean(knn_indices, axis=1))
+
+    pred = predict(reference_embeddings, reference_labels, test_embeddings, args.k)
+    #test_labels = test_labels.numpy()
+    test_labels = test_labels.cpu().numpy()
+
+    # pred = pred.cpu().numpy()
+    # test_labels = test_labels.cpu().numpy()
     acc = np.mean(pred == test_labels)
+
     return {
     "ACC" : acc,
     "MAE" : mean_absolute_error(pred , test_labels),
@@ -180,25 +243,41 @@ def Evaluation(test_dataset, train_dataset, model ,args , k = 10):
     "QWK" : cohen_kappa_score(test_labels, pred , weights='quadratic'),
     "C_index" : compute_c_index(test_labels, pred)
 }
-def get_embeddings_labels(dataset, model, args):
-    model.eval()
-    data_loader = DataLoader(
-        dataset ,
-        batch_size = 128,
-        shuffle = False,
-        drop_last = False,
-        num_workers=args.workers
-    )
-    embeddings = torch.Tensor()
-    labels = torch.LongTensor()
+@timer
+def Evaluation_P(test_loader, proxies, model ,args):
+    test_embeddings, test_labels = extract_features(test_loader, model, args)
     with torch.no_grad():
-        for (input, target) in (data_loader):
+        P = torch.nn.functional.normalize(proxies , dim = 1).to(args.gpu)
+        _, nn_idx = torch.topk(-torch.cdist(test_embeddings , P), k=1)
+        pred = nn_idx.squeeze().cpu().numpy()
+
+    test_labels = test_labels.cpu().numpy()
+    acc = np.mean(pred == test_labels)
+    return {
+        "ACC": acc,
+        "MAE": mean_absolute_error(pred, test_labels),
+        "MSE": mean_squared_error(pred, test_labels),
+        "QWK": cohen_kappa_score(test_labels, pred, weights='quadratic'),
+        "C_index": compute_c_index(test_labels, pred)
+    }
+
+def extract_features(data_loader, model, args):
+    model.eval()
+    device = 'cpu' if args.gpu is None else args.gpu
+    embeddings = torch.Tensor().to(device)
+    labels = torch.LongTensor().to(device)
+    with torch.no_grad():
+        for (input, target) in data_loader:
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
+                target = target.cuda(args.gpu, non_blocking=True)
             output = model(input)
-            embeddings = torch.cat((embeddings, output.cpu()), 0)
+            #embeddings = torch.cat((embeddings, output.cpu()), 0)
+            embeddings = torch.cat((embeddings, output), 0)
             labels = torch.cat((labels, target))
     return embeddings, labels
+
+
 
 
 

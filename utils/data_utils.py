@@ -1,10 +1,13 @@
-from torch.utils.data import  Dataset, random_split, Subset, BatchSampler, DataLoader
 import numpy as np
 import torch
-from collections import defaultdict
 import random
-from MPerClassSampler import MPerClassSampler
+import  torchvision.transforms as transforms
 
+from collections import defaultdict
+from torch.utils.data import  Dataset, random_split, Subset, BatchSampler, DataLoader
+from MPerClassSampler import MPerClassSampler
+from math import ceil
+from typing import *
 
 # 将数据集划分为K等分, 训练集:测试集 = K - 1 : 1, 进一步按照比例将训练划分为相对信息和绝对信息
 # random_spilt方法会丢失Dataset的labels等属性 , 所以继承SubSet自定义数据集划分
@@ -29,7 +32,7 @@ class CustomSubset(Subset):
     def __init__(self , dataset : Dataset, indices, transform = None):
         super().__init__(dataset, indices)
         self.transform = transform
-        self.labels = [self.dataset.labels[index] for index in indices]
+        self.labels = [self.dataset.targets[index] for index in indices]
     def __len__(self):
         return len(self.indices)
     def __getitem__(self, item):
@@ -38,6 +41,7 @@ class CustomSubset(Subset):
         if self.transform is not None:
             data = self.transform(data)
         return data , label
+
 
 class MultiTaskDataset(Dataset):
     def __init__(self, datasets):
@@ -121,24 +125,55 @@ class POP(Dataset):
         return res
 
 
-def spilt_dataset(dataset, r: float, tx=None, ty=None):
+def spilt_dataset(dataset, r: float, tx = None, ty = None):
     sze = len(dataset)
     shuffled_indices = np.random.permutation(sze)
+    datasets_after_spilt = []
     datasetX = CustomSubset(dataset, shuffled_indices[0: int(sze * r)], tx)
     datasetY = CustomSubset(dataset, shuffled_indices[int(sze * r):], ty)
-    return datasetX, datasetY
+    datasets_after_spilt.extend([datasetX, datasetY])
+
+    return datasets_after_spilt
 
 
-def process_dataset(dataset: Dataset, train_ratio, abs_ratio, tx = None , ty = None, N = 10):
-    # 划分训练集和测试集, 并施以不同的transform
-    train_data, test_data = spilt_dataset(dataset, train_ratio, tx, ty)
-    # 进一步将训练集划分为绝对信息和相对信息训练集
-    abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio)
-    # N等分构建偏序对
-    # partial_order_pair = POP(rel_train_dataset, N)
-    # return (abs_train_dataset, partial_order_pair, test_data)
-    return abs_train_dataset,rel_train_dataset, test_data
+# def process_dataset(dataset: Dataset, train_ratio, abs_ratio, train_transform = None , test_transform = None, aug_transform = None):
+#     #划分训练集和测试集, 并施以不同的transform
+#     train_data, eval_data = spilt_dataset(dataset, train_ratio, train_transform, test_transform)
+#     #train_data, test_data = spilt_dataset(dataset , train_ratio, tx , ty)
+#     # 进一步将训练集划分为绝对信息和相对信息训练集
+#     abs_train_dataset, rel_train_dataset = spilt_dataset(train_data, abs_ratio, )
+#     test_data, valid_data = spilt_dataset(eval_data, 0.5)
+#     #return abs_train_dataset,rel_train_dataset, test_data, valid_data
+#     return {
+#         'ab_train' : abs_train_dataset,
+#         're_train' : rel_train_dataset,
+#         'test' : test_data,
+#         'valid' : valid_data
+#     }
 
+def process_dataset(dataset: Dataset, train_ratio, abs_ratio, train_transform = None , test_transform = None, aug_transform = None):
+    sze = len(dataset)
+    shuffled_indices = np.random.permutation(sze)
+    # train dataset
+    train_sze = ceil(sze * train_ratio)
+    ab_indices = range(ceil(train_sze * abs_ratio))
+    re_indices = range(ceil(train_sze * abs_ratio) , train_sze)
+
+    test_sze = (sze - train_sze) // 2
+    test_indices = range(train_sze ,  train_sze + test_sze)
+    val_indices = range(train_sze + test_sze , sze)
+
+    abs_train_dataset = CustomSubset(dataset, shuffled_indices[ab_indices], train_transform)
+    rel_train_dataset = CustomSubset(dataset, shuffled_indices[re_indices], aug_transform if aug_transform else train_transform)
+    test_data = CustomSubset(dataset, shuffled_indices[test_indices], test_transform)
+    valid_data = CustomSubset(dataset, shuffled_indices[val_indices], test_transform)
+
+    return {
+        'ab_train' : abs_train_dataset,
+        're_train' : rel_train_dataset,
+        'test' : test_data,
+        'valid' : valid_data
+    }
 
 def match_partial_pairs(batch):
     # 按照标签分类
@@ -202,14 +237,14 @@ def online_match(labels : torch.Tensor, r):
             if labels[i] == labels[j]: continue
             a = 1 if labels[i] > labels[j] else 0
             pre_idx.extend([i , j])
-            succ_idx.extend([j , ])
+            succ_idx.extend([j , i])
             new_labels.extend([a , a ^ 1])
             if len(new_labels) > M:
                 break
     L = min(M , len(new_labels))
     return np.array(pre_idx[ : L]) , np.array(succ_idx[ : L]), torch.tensor(new_labels[ : L])
 
-def getLoader(args , abs_train_dataset , rel_train_dataset, test_dataset):
+def loader_init(args , abs_train_dataset , rel_train_dataset, test_dataset, val_dataset):
     ######################################## Absolute information DataLoader #################################
     samplerA = MPerClassSampler(
         abs_train_dataset.labels,
@@ -223,12 +258,19 @@ def getLoader(args , abs_train_dataset , rel_train_dataset, test_dataset):
         pin_memory=True,
         num_workers=args.workers
     )
-
+    #absolute informat evaluate dataloader  -------fix the sequence --------a copy
+    abs_eval_loader = DataLoader(
+        abs_train_dataset,
+        shuffle = False,
+        batch_size = args.eval_batch_size,
+        pin_memory = True,
+        num_workers = args.workers
+    )
     ######################################## Relative information DataLoader #################################
     # P = len(dataset.classes) if args.P is None else args.P
     P = args.P
     batch_size = P * args.K
-    iter_per_epoch = (len(rel_train_dataset) + batch_size - 1)// batch_size if args.iter_per_epoch is None else args.iter_per_eopch
+    iter_per_epoch = (len(rel_train_dataset) + batch_size - 1) // batch_size if args.iter_per_epoch is None else args.iter_per_epoch
     samplerR = MPerClassSampler(
         rel_train_dataset.labels,
         batch_size=batch_size,
@@ -243,8 +285,45 @@ def getLoader(args , abs_train_dataset , rel_train_dataset, test_dataset):
         num_workers=args.workers,
     )
 
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+        num_workers=args.workers,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+        num_workers=args.workers,
+        pin_memory=True
+    )
 
-    return abs_train_loader , rel_train_loader
+    return abs_train_loader , abs_eval_loader, rel_train_loader, test_loader, val_loader
+
+def details_info_print(datasets , classes):
+    print('=' * 20 + " The distributions of datasets " + "=" * 20)
+    header = ["Class"] + classes + ["Total"]
+    n , m = len(classes) , len(datasets)
+    # data -> (n + 1) * len(datasets)
+    data = [header]
+    for name , dataset in datasets.items():
+        unique_labels , counts = np.unique(dataset.labels, return_counts = True)
+        counts_dict  = dict(zip(unique_labels, counts))
+        #print(counts_dict)
+        data.append([name] + [counts_dict[cls] if cls in counts_dict else 0 for cls in classes] + [len(dataset.labels)])
+
+    # computer the max width of every column
+    col_widths = [max(len(str(row[i])) for row in data) for i in range(len(header))]
+    # print data
+    s = False
+    for row in data:
+        print(' | '.join(str(row[i]).ljust(col_widths[i]) for i in range(len(header))))
+        if not s:
+            print('-' * (sum(col_widths) + 3 * len(header) - 3)) # print separator
+            s = True
+
+
 
 if __name__ == "__main__":
     # 用法

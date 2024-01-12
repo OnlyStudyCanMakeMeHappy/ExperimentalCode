@@ -7,25 +7,25 @@ __all__ = ['MultiTaskModel']
 class MultiTaskModel(nn.Module):
     def __init__(self ,  f_dim, g_dim, g_hidden_size ,Backbone = "resnet50"):
         super(MultiTaskModel, self).__init__()
-        if Backbone == "resnet50":
-            self.backbone = ResNet50()
-        elif Backbone == "resnet18":
-            self.backbone = ResNet18()
+        BackboneOptions = {
+            'resnet18' : ResNet18(),
+            'resnet50': ResNet50(),
+        }
+        self.backbone = None
+        try:
+            self.backbone = BackboneOptions[Backbone]
+        except KeyError:
+            print(f"The Backbone must be one of {list(BackboneOptions.keys())}")
         #TODO : Other baseline
         output_size = self.backbone.output_size
         self.f_head = Embedding(output_size , f_dim)
         self.g_head = MLP(feature_size=output_size, embedding_size=g_dim , hidden_size=g_hidden_size)
 
 
-    def forward(self , x , task_id : int = 0):
-        feature = self.backbone(x)
-        if task_id == 0:
-            output = self.f_head(feature)
-        elif task_id == 1:
-            output = self.g_head(feature)
-        else:
-            raise Exception("Only two task,The task_id must be 0 or 1!")
-        return output
+    def forward(self , x):
+        x =  self.backbone(x)
+        return self.f_head(x)
+        #return feature , output
 
 if __name__ == "__main__":
     model = Model(128 , 128, 512)

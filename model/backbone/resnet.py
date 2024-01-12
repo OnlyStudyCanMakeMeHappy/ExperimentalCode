@@ -1,4 +1,4 @@
-from torchvision.models import resnet50, ResNet50_Weights, resnet18, ResNet18_Weights
+from torchvision.models import resnet50, ResNet50_Weights, resnet18, ResNet18_Weights, wide_resnet50_2
 import torch.nn as nn
 
 __all__ = ["ResNet50" , "ResNet18"]
@@ -11,6 +11,7 @@ class ResNet50(nn.Module):
         super(ResNet50, self).__init__()
 
         model = resnet50(weights = ResNet50_Weights.DEFAULT)
+        #model = wide_resnet50_2(pretrained = True)
         model.fc = nn.Identity()
         model.avgpool = GMP_and_GAP()
         self.model = model

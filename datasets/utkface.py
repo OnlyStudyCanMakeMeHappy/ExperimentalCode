@@ -28,8 +28,9 @@ class UTKFace(Dataset):
         self.transform = transform
         # 映射年龄为组标签
         self.groupID = [mapping_age_to_group[int(age)] for age in real_ages]
-        self.labels = self.groupID
-        self.classes = list(set(self.labels))
+        self.targets = self.groupID
+        #self.labels = [int(age) for age in real_ages]
+        self.classes = list(set(self.targets))
 
     def __len__(self):
         return len(self.images_path)
@@ -39,5 +40,9 @@ class UTKFace(Dataset):
         image = Image.fromarray(image)
         if self.transform is not None:
             image = self.transform(image)
-        label = self.labels[item]
-        return image, label
+        label = self.targets[item]
+        return image,label
+
+if __name__ == "__main__":
+    dataset = UTKFace()
+    print(dataset.__class__.__name__)
